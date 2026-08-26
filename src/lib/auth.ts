@@ -48,7 +48,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("id, full_name, email, role, professional_id, active")
+      .select("id, full_name, email, role, professional_id, organization_id, active_branch_id, active")
       .eq("id", user.id)
       .maybeSingle();
 
@@ -56,12 +56,38 @@ export async function getSessionUser(): Promise<SessionUser | null> {
       return null;
     }
 
+    if (!profile.organization_id || !profile.active_branch_id) {
+      return null;
+    }
+
+    const [{ data: membership }, { data: branchAccess }] = await Promise.all([
+      supabase
+        .from("organization_members")
+        .select("role, active")
+        .eq("organization_id", profile.organization_id)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      supabase
+        .from("user_branch_access")
+        .select("active")
+        .eq("organization_id", profile.organization_id)
+        .eq("branch_id", profile.active_branch_id)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+    ]);
+
+    if (!membership || membership.active === false || !branchAccess || branchAccess.active === false) {
+      return null;
+    }
+
     return {
       id: String(profile.id),
       name: String(profile.full_name),
       email: String(profile.email || user.email || ""),
-      role: profile.role as SessionUser["role"],
+      role: membership.role as SessionUser["role"],
       professionalId: profile.professional_id ? String(profile.professional_id) : undefined,
+      organizationId: profile.organization_id ? String(profile.organization_id) : undefined,
+      branchId: profile.active_branch_id ? String(profile.active_branch_id) : undefined,
     };
   }
 
@@ -82,6 +108,8 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     email: profile.email,
     role: profile.role,
     professionalId: profile.professionalId,
+    organizationId: "local-development",
+    branchId: "local-main",
   };
 }
 

@@ -10,6 +10,7 @@ import { requireRoleForPath } from "@/lib/auth";
 import { readStore, writeStore } from "@/lib/store";
 import { getSupabaseAdminClient, getSupabaseServerClient } from "@/lib/supabase";
 import { shouldUseSupabaseStore } from "@/lib/supabase-store";
+import { tenantScopeFromUser } from "@/lib/tenant";
 import type {
   Appointment,
   AppointmentServiceLine,
@@ -99,11 +100,12 @@ async function runSupabaseRpc(path: string, name: string, args: Record<string, u
   }
 }
 
-async function upsertSupabaseCategory(path: string, table: string, id: string, name: string) {
+async function upsertSupabaseCategory(path: string, table: string, id: string, name: string, organizationId: string) {
   const supabase = requireSupabaseAdmin(path);
   const { data: existing, error: selectError } = await supabase
     .from(table)
     .select("id, name")
+    .eq("organization_id", organizationId)
     .ilike("name", name)
     .maybeSingle();
 
@@ -115,7 +117,11 @@ async function upsertSupabaseCategory(path: string, table: string, id: string, n
     return { id: String(existing.id), name: String(existing.name) };
   }
 
-  const { data, error } = await supabase.from(table).insert({ id, name }).select("id, name").single();
+  const { data, error } = await supabase
+    .from(table)
+    .insert({ id: `${id}-${randomUUID()}`, name, organization_id: organizationId })
+    .select("id, name")
+    .single();
   if (error) {
     fail(path, error.message);
   }
@@ -210,6 +216,8 @@ async function recordAudit(
 
   const supabase = getSupabaseAdminClient();
   await supabase?.from("audit_logs").insert({
+    organization_id: user.organizationId,
+    branch_id: user.branchId,
     actor_id: user.id,
     actor_email: user.email,
     action,
@@ -221,7 +229,8 @@ async function recordAudit(
 
 export async function createClientAction(formData: FormData) {
   const user = await requireRoleForPath("/clientes");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const name = getString(formData, "name");
   const phone = getString(formData, "phone");
 
@@ -242,6 +251,7 @@ export async function createClientAction(formData: FormData) {
 
   if (shouldUseSupabaseStore()) {
     const { error } = await requireSupabaseAdmin("/clientes").from("clients").insert({
+      organization_id: tenant.organizationId,
       id: client.id,
       full_name: client.name,
       phone: client.phone,
@@ -259,14 +269,15 @@ export async function createClientAction(formData: FormData) {
   }
 
   store.clients.unshift(client);
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "create", "client", client.id);
   done("/clientes", "Cliente guardado.");
 }
 
 export async function createProfessionalAction(formData: FormData) {
   const user = await requireRoleForPath("/configuracion");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const name = getString(formData, "name");
 
   if (!name) {
@@ -274,7 +285,7 @@ export async function createProfessionalAction(formData: FormData) {
   }
 
   const professional = {
-    id: `pro-${slugify(name) || randomUUID()}`,
+    id: `pro-${slugify(name) || "profesional"}-${randomUUID()}`,
     name,
     specialty: getString(formData, "specialty"),
     color: getString(formData, "color") || "#0f766e",
@@ -283,6 +294,7 @@ export async function createProfessionalAction(formData: FormData) {
 
   if (shouldUseSupabaseStore()) {
     const { error } = await requireSupabaseAdmin("/configuracion").from("professionals").insert({
+      organization_id: tenant.organizationId,
       id: professional.id,
       full_name: professional.name,
       specialty: professional.specialty,
@@ -292,19 +304,31 @@ export async function createProfessionalAction(formData: FormData) {
     if (error) {
       fail("/configuracion", error.message);
     }
+    const { error: branchError } = await requireSupabaseAdmin("/configuracion")
+      .from("professional_branches")
+      .insert({
+        organization_id: tenant.organizationId,
+        professional_id: professional.id,
+        branch_id: tenant.branchId,
+        active: true,
+      });
+    if (branchError) {
+      fail("/configuracion", branchError.message);
+    }
     await recordAudit(user, "create", "professional", professional.id);
     done("/configuracion", "Profesional creado.");
   }
 
   store.professionals.push(professional);
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "create", "professional", professional.id);
   done("/configuracion", "Profesional creado.");
 }
 
 export async function updateProfessionalStatusAction(formData: FormData) {
   const user = await requireRoleForPath("/configuracion");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const professionalId = getString(formData, "professionalId");
   const active = getString(formData, "active") === "true";
 
@@ -316,6 +340,7 @@ export async function updateProfessionalStatusAction(formData: FormData) {
     const { error } = await requireSupabaseAdmin("/configuracion")
       .from("professionals")
       .update({ active })
+      .eq("organization_id", tenant.organizationId)
       .eq("id", professionalId);
     if (error) {
       fail("/configuracion", error.message);
@@ -327,14 +352,15 @@ export async function updateProfessionalStatusAction(formData: FormData) {
   store.professionals = store.professionals.map((professional) =>
     professional.id === professionalId ? { ...professional, active } : professional,
   );
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, active ? "activate" : "deactivate", "professional", professionalId);
   done("/configuracion", active ? "Profesional activado." : "Profesional desactivado.");
 }
 
 export async function createServiceAction(formData: FormData) {
   const user = await requireRoleForPath("/configuracion");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const categoryName = getString(formData, "categoryName");
   const name = getString(formData, "name");
 
@@ -344,7 +370,7 @@ export async function createServiceAction(formData: FormData) {
 
   const category = upsertCategory(store.serviceCategories, categoryName, "svc-cat");
   const service = {
-    id: `service-${slugify(name) || randomUUID()}`,
+    id: `service-${slugify(name) || "servicio"}-${randomUUID()}`,
     name,
     categoryId: category.id,
     categoryName: category.name,
@@ -359,8 +385,10 @@ export async function createServiceAction(formData: FormData) {
       "service_categories",
       category.id,
       category.name,
+      tenant.organizationId,
     );
     const { error } = await requireSupabaseAdmin("/configuracion").from("services").insert({
+      organization_id: tenant.organizationId,
       id: service.id,
       name: service.name,
       category_id: supabaseCategory.id,
@@ -376,14 +404,15 @@ export async function createServiceAction(formData: FormData) {
   }
 
   store.services.push(service);
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "create", "service", service.id);
   done("/configuracion", "Servicio creado.");
 }
 
 export async function createProductAction(formData: FormData) {
   const user = await requireRoleForPath("/configuracion");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const categoryName = getString(formData, "categoryName");
   const name = getString(formData, "name");
   const sku = getString(formData, "sku");
@@ -398,7 +427,7 @@ export async function createProductAction(formData: FormData) {
 
   const category = upsertCategory(store.productCategories, categoryName, "prd-cat");
   const product = {
-    id: `product-${slugify(name) || randomUUID()}`,
+    id: `product-${slugify(name) || "producto"}-${randomUUID()}`,
     name,
     categoryId: category.id,
     categoryName: category.name,
@@ -415,8 +444,11 @@ export async function createProductAction(formData: FormData) {
       "product_categories",
       category.id,
       category.name,
+      tenant.organizationId,
     );
     const { error } = await requireSupabaseAdmin("/configuracion").from("products").insert({
+      organization_id: tenant.organizationId,
+      branch_id: tenant.branchId,
       id: product.id,
       name: product.name,
       category_id: supabaseCategory.id,
@@ -434,14 +466,15 @@ export async function createProductAction(formData: FormData) {
   }
 
   store.products.push(product);
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "create", "product", product.id);
   done("/configuracion", "Producto creado.");
 }
 
 export async function updateSettingsAction(formData: FormData) {
   const user = await requireRoleForPath("/configuracion");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
 
   store.settings = {
     ...store.settings,
@@ -452,7 +485,8 @@ export async function updateSettingsAction(formData: FormData) {
 
   if (shouldUseSupabaseStore()) {
     const { error } = await requireSupabaseAdmin("/configuracion").from("settings").upsert({
-      id: "default",
+      id: `settings-${tenant.organizationId}`,
+      organization_id: tenant.organizationId,
       salon_name: store.settings.salonName,
       business_name: store.settings.businessName,
       currency: store.settings.currency,
@@ -467,14 +501,15 @@ export async function updateSettingsAction(formData: FormData) {
     done("/configuracion", "Ajustes guardados.");
   }
 
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "update", "settings", "default");
   done("/configuracion", "Ajustes guardados.");
 }
 
 export async function createUserAction(formData: FormData) {
   const user = await requireRoleForPath("/configuracion");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const email = getString(formData, "email").toLowerCase();
   const name = getString(formData, "name");
   const password = getString(formData, "password");
@@ -519,11 +554,33 @@ export async function createUserAction(formData: FormData) {
       email,
       role,
       professional_id: professionalId ?? null,
+      organization_id: tenant.organizationId,
+      active_branch_id: tenant.branchId,
       active: true,
     });
 
     if (profileError) {
       fail("/configuracion", profileError.message);
+    }
+
+    const { error: membershipError } = await supabase.from("organization_members").upsert({
+      organization_id: tenant.organizationId,
+      user_id: data.user.id,
+      role,
+      active: true,
+    });
+    if (membershipError) {
+      fail("/configuracion", membershipError.message);
+    }
+
+    const { error: branchAccessError } = await supabase.from("user_branch_access").upsert({
+      organization_id: tenant.organizationId,
+      branch_id: tenant.branchId,
+      user_id: data.user.id,
+      active: true,
+    });
+    if (branchAccessError) {
+      fail("/configuracion", branchAccessError.message);
     }
 
     await recordAudit(user, "invite", "profile", data.user.id, { role });
@@ -545,13 +602,14 @@ export async function createUserAction(formData: FormData) {
   };
 
   store.profiles.push(profile);
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "create", "profile", profile.id, { role });
   done("/configuracion", "Usuario creado.");
 }
 
 export async function updateProfileAction(formData: FormData) {
   const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
   const profileId = getString(formData, "profileId");
   const role = getString(formData, "role") as Role;
   const professionalId = getString(formData, "professionalId") || undefined;
@@ -574,19 +632,28 @@ export async function updateProfileAction(formData: FormData) {
     const { error } = await supabase!
       .from("profiles")
       .update({ role, professional_id: professionalId ?? null, active })
+      .eq("organization_id", tenant.organizationId)
       .eq("id", profileId);
     if (error) {
       fail("/configuracion", error.message);
+    }
+    const { error: membershipError } = await supabase!
+      .from("organization_members")
+      .update({ role, active })
+      .eq("organization_id", tenant.organizationId)
+      .eq("user_id", profileId);
+    if (membershipError) {
+      fail("/configuracion", membershipError.message);
     }
     await recordAudit(user, "update", "profile", profileId, { role, active });
     done("/configuracion", "Usuario actualizado.");
   }
 
-  const store = await readStore();
+  const store = await readStore(user);
   store.profiles = store.profiles.map((profile) =>
     profile.id === profileId ? { ...profile, role, professionalId, active } : profile,
   );
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "update", "profile", profileId, { role, active });
   done("/configuracion", "Usuario actualizado.");
 }
@@ -617,7 +684,8 @@ export async function resetUserAccessAction(formData: FormData) {
 
 export async function createAppointmentAction(formData: FormData) {
   const user = await requireRoleForPath("/agenda");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const professionalId = getString(formData, "professionalId");
   ensureStylistProfessional(user, professionalId, "/agenda");
 
@@ -674,20 +742,23 @@ export async function createAppointmentAction(formData: FormData) {
   }
 
   if (shouldUseSupabaseStore()) {
-    await runSupabaseRpc("/agenda", "create_appointment_transaction", { payload: appointment });
+    await runSupabaseRpc("/agenda", "tenant_create_appointment_transaction", {
+      payload: { ...appointment, organizationId: tenant.organizationId, branchId: tenant.branchId },
+    });
     await recordAudit(user, "create", "appointment", appointment.id);
     done("/agenda", "Cita creada.");
   }
 
   store.appointments.push(appointment);
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "create", "appointment", appointment.id);
   done("/agenda", "Cita creada.");
 }
 
 export async function updateAppointmentStatusAction(formData: FormData) {
   const user = await requireRoleForPath("/agenda");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const appointmentId = getString(formData, "appointmentId");
   const status = getString(formData, "status") as Appointment["status"];
   const appointment = store.appointments.find((item) => item.id === appointmentId);
@@ -716,9 +787,10 @@ export async function updateAppointmentStatusAction(formData: FormData) {
   }
 
   if (shouldUseSupabaseStore()) {
-    await runSupabaseRpc("/agenda", "update_appointment_status_transaction", {
+    await runSupabaseRpc("/agenda", "tenant_update_appointment_status_transaction", {
       p_appointment_id: appointmentId,
       p_status: status,
+      p_organization_id: tenant.organizationId,
     });
     await recordAudit(user, "status", "appointment", appointmentId, { status });
     done("/agenda", "Estado actualizado.");
@@ -728,14 +800,15 @@ export async function updateAppointmentStatusAction(formData: FormData) {
     item.id === appointmentId ? { ...item, status } : item,
   );
 
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "status", "appointment", appointmentId, { status });
   done("/agenda", "Estado actualizado.");
 }
 
 export async function convertAppointmentToSaleAction(formData: FormData) {
   const user = await requireRoleForPath("/ventas");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const appointmentId = getString(formData, "appointmentId");
   const appointment = store.appointments.find((item) => item.id === appointmentId);
 
@@ -747,11 +820,13 @@ export async function convertAppointmentToSaleAction(formData: FormData) {
   const saleId = `sale-${randomUUID()}`;
 
   if (shouldUseSupabaseStore()) {
-    await runSupabaseRpc("/ventas", "convert_appointment_to_sale_transaction", {
+    await runSupabaseRpc("/ventas", "tenant_convert_appointment_to_sale_transaction", {
       p_appointment_id: appointment.id,
       p_sale_id: saleId,
       p_sold_at: new Date().toISOString(),
       p_notes: `Creada desde cita ${appointment.id}`,
+      p_organization_id: tenant.organizationId,
+      p_branch_id: tenant.branchId,
     });
     await recordAudit(user, "convert", "appointment", appointment.id, { saleId });
     done("/ventas", "Venta creada.");
@@ -786,14 +861,15 @@ export async function convertAppointmentToSaleAction(formData: FormData) {
     item.id === appointment.id ? { ...item, saleId: sale.id, status: "completed" } : item,
   );
 
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "convert", "appointment", appointment.id, { saleId: sale.id });
   done("/ventas", "Venta creada.");
 }
 
 export async function createSaleAction(formData: FormData) {
   const user = await requireRoleForPath("/ventas");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const rawItems = parseJson<Array<{ type: "service" | "product"; referenceId: string; quantity: number; unitPrice: number }>>(
     getString(formData, "saleItems"),
     [],
@@ -897,13 +973,15 @@ export async function createSaleAction(formData: FormData) {
   }
 
   if (shouldUseSupabaseStore()) {
-    await runSupabaseRpc("/ventas", "create_manual_sale_transaction", {
+    await runSupabaseRpc("/ventas", "tenant_create_manual_sale_transaction", {
       payload: {
         id: saleBase.id,
         clientId,
         professionalId,
         soldAt,
         notes: saleBase.notes,
+        organizationId: tenant.organizationId,
+        branchId: tenant.branchId,
         items,
         initialPayment:
           initialPaymentAmount > 0
@@ -935,14 +1013,15 @@ export async function createSaleAction(formData: FormData) {
     );
   }
 
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "create", "sale", saleBase.id, { total });
   done("/ventas", "Venta guardada.");
 }
 
 export async function recordPaymentAction(formData: FormData) {
   const user = await requireRoleForPath("/ventas");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const saleId = getString(formData, "saleId");
   const amount = clampNumber(getNumber(formData, "amount"));
 
@@ -967,13 +1046,15 @@ export async function recordPaymentAction(formData: FormData) {
   const paymentId = `payment-${randomUUID()}`;
 
   if (shouldUseSupabaseStore()) {
-    await runSupabaseRpc("/ventas", "record_payment_transaction", {
+    await runSupabaseRpc("/ventas", "tenant_record_payment_transaction", {
       p_sale_id: saleId,
       p_payment_id: paymentId,
       p_amount: amount,
       p_method: (getString(formData, "method") || "cash") as PaymentMethod,
       p_paid_at: paidAt,
       p_note: getString(formData, "note"),
+      p_organization_id: tenant.organizationId,
+      p_branch_id: tenant.branchId,
     });
     await recordAudit(user, "payment", "sale", saleId, { amount });
     done("/ventas", "Abono guardado.");
@@ -992,14 +1073,15 @@ export async function recordPaymentAction(formData: FormData) {
     item.id === saleId ? updateSaleBalances(item, item.amountPaid + amount) : item,
   );
 
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "payment", "sale", saleId, { amount });
   done("/ventas", "Abono guardado.");
 }
 
 export async function createPurchaseAction(formData: FormData) {
   const user = await requireRoleForPath("/compras");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const supplier = getString(formData, "supplier");
   const categoryName = getString(formData, "categoryName");
 
@@ -1042,13 +1124,15 @@ export async function createPurchaseAction(formData: FormData) {
   const total = items.reduce((sum, item) => sum + item.total, 0);
 
   if (shouldUseSupabaseStore()) {
-    await runSupabaseRpc("/compras", "create_purchase_transaction", {
+    await runSupabaseRpc("/compras", "tenant_create_purchase_transaction", {
       payload: {
         id: purchaseId,
         purchasedAt,
         supplier,
         categoryName,
         notes: getString(formData, "notes"),
+        organizationId: tenant.organizationId,
+        branchId: tenant.branchId,
         items,
       },
     });
@@ -1090,14 +1174,15 @@ export async function createPurchaseAction(formData: FormData) {
     });
   }
 
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "create", "purchase", purchaseId, { total });
   done("/compras", "Compra guardada.");
 }
 
 export async function adjustStockAction(formData: FormData) {
   const user = await requireRoleForPath("/inventario");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const productId = getString(formData, "productId");
   const quantityChange = getNumber(formData, "quantityChange");
   const happenedAt = parseRequiredDate(getString(formData, "happenedAt"), "/inventario", "Fecha");
@@ -1115,12 +1200,14 @@ export async function adjustStockAction(formData: FormData) {
   const movementId = `move-${randomUUID()}`;
 
   if (shouldUseSupabaseStore()) {
-    await runSupabaseRpc("/inventario", "adjust_stock_transaction", {
+    await runSupabaseRpc("/inventario", "tenant_adjust_stock_transaction", {
       p_product_id: productId,
       p_movement_id: movementId,
       p_quantity_change: quantityChange,
       p_happened_at: happenedAt,
       p_note: getString(formData, "note") || "Ajuste manual",
+      p_organization_id: tenant.organizationId,
+      p_branch_id: tenant.branchId,
     });
     await recordAudit(user, "adjust", "product", productId, { quantityChange });
     done("/inventario", "Stock actualizado.");
@@ -1140,14 +1227,15 @@ export async function adjustStockAction(formData: FormData) {
     happenedAt,
   });
 
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "adjust", "product", productId, { quantityChange });
   done("/inventario", "Stock actualizado.");
 }
 
 export async function createExpenseAction(formData: FormData) {
   const user = await requireRoleForPath("/gastos");
-  const store = await readStore();
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
   const categoryName = getString(formData, "categoryName");
   const description = getString(formData, "description");
   const amount = clampNumber(getNumber(formData, "amount"));
@@ -1167,13 +1255,28 @@ export async function createExpenseAction(formData: FormData) {
   };
 
   if (shouldUseSupabaseStore()) {
-    await runSupabaseRpc("/gastos", "create_expense_transaction", { payload: expense });
+    const supabaseCategory = await upsertSupabaseCategory(
+      "/gastos",
+      "expense_categories",
+      category.id,
+      category.name,
+      tenant.organizationId,
+    );
+    await runSupabaseRpc("/gastos", "tenant_create_expense_transaction", {
+      payload: {
+        ...expense,
+        categoryId: supabaseCategory.id,
+        categoryName: supabaseCategory.name,
+        organizationId: tenant.organizationId,
+        branchId: tenant.branchId,
+      },
+    });
     await recordAudit(user, "create", "expense", expense.id, { amount });
     done("/gastos", "Gasto guardado.");
   }
 
   store.expenses.unshift(expense);
-  await writeStore(store);
+  await writeStore(store, user);
   await recordAudit(user, "create", "expense", expense.id, { amount });
   done("/gastos", "Gasto guardado.");
 }

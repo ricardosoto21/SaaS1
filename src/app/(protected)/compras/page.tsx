@@ -26,7 +26,7 @@ export default async function ComprasPage({ searchParams }: ComprasPageProps) {
   }
 
   const params = (await searchParams) ?? {};
-  const store = await readStore();
+  const store = await readStore(user);
   const purchases = getVisiblePurchases(store);
   const currentMonth = getCurrentMonthRange();
   const filters = {

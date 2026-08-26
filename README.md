@@ -2,6 +2,8 @@
 
 App web de control de gestion para una peluqueria.
 
+El repositorio esta en transicion a SaaS multiempresa. La Fase 1 introduce organizaciones, sucursales y aislamiento por tenant; consulta [docs/fase-1-multi-tenancy.md](/C:/Users/Riki/Documents/App%20gestion%20peluqueria/docs/fase-1-multi-tenancy.md) antes de aplicar las migraciones en Supabase.
+
 ## Incluye
 
 - Login privado con roles `admin`, `recepcion` y `estilista`
@@ -49,6 +51,7 @@ npm run build
 npm run start
 npm run lint
 npm run typecheck
+npm run test
 ```
 
 ## Variables de entorno

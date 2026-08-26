@@ -32,7 +32,7 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
     redirect("/dashboard");
   }
 
-  const store = await readStore();
+  const store = await readStore(user);
   const params = (await searchParams) ?? {};
   const usesSupabase = shouldUseSupabaseStore();
 

@@ -35,7 +35,7 @@ export default async function InventarioPage({ searchParams }: InventarioPagePro
   }
 
   const params = (await searchParams) ?? {};
-  const store = await readStore();
+  const store = await readStore(user);
   const lowStockCount = store.products.filter((product) => product.currentStock <= store.settings.lowStockThreshold).length;
   const inventoryValue = store.products.reduce((sum, product) => sum + product.currentStock * product.cost, 0);
   const movements = getVisibleInventoryMovements(store);

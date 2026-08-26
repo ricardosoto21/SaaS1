@@ -5,7 +5,8 @@ import path from "node:path";
 
 import { initialStore } from "@/lib/seed";
 import { readSupabaseStore, shouldUseSupabaseStore, writeSupabaseStore } from "@/lib/supabase-store";
-import type { AppStore } from "@/lib/types";
+import { tenantScopeFromUser } from "@/lib/tenant";
+import type { AppStore, SessionUser } from "@/lib/types";
 
 const dataDir = path.join(process.cwd(), "data");
 const storePath = path.join(dataDir, "app-store.json");
@@ -20,9 +21,12 @@ async function ensureStoreFile() {
   }
 }
 
-export async function readStore(): Promise<AppStore> {
+export async function readStore(user?: SessionUser): Promise<AppStore> {
   if (shouldUseSupabaseStore()) {
-    return readSupabaseStore();
+    if (!user) {
+      throw new Error("Se requiere el contexto del usuario para leer datos de la organizacion.");
+    }
+    return readSupabaseStore(tenantScopeFromUser(user));
   }
 
   await ensureStoreFile();
@@ -30,9 +34,12 @@ export async function readStore(): Promise<AppStore> {
   return JSON.parse(raw) as AppStore;
 }
 
-export async function writeStore(store: AppStore) {
+export async function writeStore(store: AppStore, user?: SessionUser) {
   if (shouldUseSupabaseStore()) {
-    await writeSupabaseStore(store);
+    if (!user) {
+      throw new Error("Se requiere el contexto del usuario para guardar datos de la organizacion.");
+    }
+    await writeSupabaseStore(store, tenantScopeFromUser(user));
     return;
   }
 

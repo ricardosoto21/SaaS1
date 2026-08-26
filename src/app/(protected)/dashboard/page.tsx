@@ -25,7 +25,7 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const user = await requireSession();
-  const store = await readStore();
+  const store = await readStore(user);
   const filters = normalizeFilters((await searchParams) ?? {});
   const dashboard = getDashboardData(store, user, filters);
   const recentActivity = getRecentActivity(store, user);

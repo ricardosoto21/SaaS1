@@ -27,7 +27,7 @@ export default async function ClientsPage({ searchParams }: ClientsPageProps) {
   }
 
   const params = (await searchParams) ?? {};
-  const store = await readStore();
+  const store = await readStore(user);
   const clients = getVisibleClients(store);
   const filters = {
     q: getParam(params, "q"),

@@ -1,5 +1,6 @@
 import { initialStore } from "@/lib/seed";
 import { getSupabaseAdminClient, hasSupabaseEnv } from "@/lib/supabase";
+import type { TenantScope } from "@/lib/tenant";
 import type {
   AppStore,
   Appointment,
@@ -51,15 +52,32 @@ function indexById<T extends { id: string }>(items: T[]) {
   return new Map(items.map((item) => [item.id, item]));
 }
 
-async function selectAll(table: string) {
-  const { data, error } = await requiredClient().from(table).select("*");
+const BRANCH_SCOPED_TABLES = new Set([
+  "products",
+  "appointments",
+  "appointment_services",
+  "sales",
+  "sale_items",
+  "payments",
+  "purchases",
+  "purchase_items",
+  "expenses",
+  "inventory_movements",
+]);
+
+async function selectAll(table: string, scope: TenantScope) {
+  let query = requiredClient().from(table).select("*").eq("organization_id", scope.organizationId);
+  if (BRANCH_SCOPED_TABLES.has(table)) {
+    query = query.eq("branch_id", scope.branchId);
+  }
+  const { data, error } = await query;
   if (error) {
     throw new Error(`No se pudo leer ${table}: ${error.message}`);
   }
   return (data ?? []) as Row[];
 }
 
-export async function readSupabaseStore(): Promise<AppStore> {
+export async function readSupabaseStore(scope: TenantScope): Promise<AppStore> {
   const [
     settingsRows,
     profileRows,
@@ -80,24 +98,24 @@ export async function readSupabaseStore(): Promise<AppStore> {
     expenseRows,
     inventoryRows,
   ] = await Promise.all([
-    selectAll("settings"),
-    selectAll("profiles"),
-    selectAll("professionals"),
-    selectAll("clients"),
-    selectAll("service_categories"),
-    selectAll("product_categories"),
-    selectAll("expense_categories"),
-    selectAll("services"),
-    selectAll("products"),
-    selectAll("appointments"),
-    selectAll("appointment_services"),
-    selectAll("sales"),
-    selectAll("sale_items"),
-    selectAll("payments"),
-    selectAll("purchases"),
-    selectAll("purchase_items"),
-    selectAll("expenses"),
-    selectAll("inventory_movements"),
+    selectAll("settings", scope),
+    selectAll("profiles", scope),
+    selectAll("professionals", scope),
+    selectAll("clients", scope),
+    selectAll("service_categories", scope),
+    selectAll("product_categories", scope),
+    selectAll("expense_categories", scope),
+    selectAll("services", scope),
+    selectAll("products", scope),
+    selectAll("appointments", scope),
+    selectAll("appointment_services", scope),
+    selectAll("sales", scope),
+    selectAll("sale_items", scope),
+    selectAll("payments", scope),
+    selectAll("purchases", scope),
+    selectAll("purchase_items", scope),
+    selectAll("expenses", scope),
+    selectAll("inventory_movements", scope),
   ]);
 
   const settingsRow = settingsRows[0];
@@ -327,8 +345,10 @@ export async function readSupabaseStore(): Promise<AppStore> {
   };
 }
 
-export async function writeSupabaseStore(store: AppStore) {
-  const { error } = await requiredClient().rpc("replace_app_store", { payload: store });
+export async function writeSupabaseStore(store: AppStore, scope: TenantScope) {
+  const { error } = await requiredClient().rpc("replace_app_store", {
+    payload: { ...store, organizationId: scope.organizationId, branchId: scope.branchId },
+  });
   if (error) {
     throw new Error(`No se pudo guardar en Supabase: ${error.message}`);
   }

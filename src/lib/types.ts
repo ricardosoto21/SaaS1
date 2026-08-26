@@ -221,4 +221,6 @@ export interface SessionUser {
   email: string;
   role: Role;
   professionalId?: string;
+  organizationId?: string;
+  branchId?: string;
 }

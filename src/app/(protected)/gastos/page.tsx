@@ -28,7 +28,7 @@ export default async function GastosPage({ searchParams }: GastosPageProps) {
   }
 
   const params = (await searchParams) ?? {};
-  const store = await readStore();
+  const store = await readStore(user);
   const expenses = getVisibleExpenses(store);
   const currentMonth = getCurrentMonthRange();
   const filters = {

@@ -57,7 +57,7 @@ export default async function VentasPage({ searchParams }: VentasPageProps) {
   }
 
   const params = (await searchParams) ?? {};
-  const store = await readStore();
+  const store = await readStore(user);
   const sales = getVisibleSales(store, user);
   const clients = getVisibleClients(store);
   const professionals = getVisibleProfessionals(store, user);

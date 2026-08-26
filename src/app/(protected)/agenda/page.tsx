@@ -56,7 +56,7 @@ export default async function AgendaPage({ searchParams }: AgendaPageProps) {
   }
 
   const params = (await searchParams) ?? {};
-  const store = await readStore();
+  const store = await readStore(user);
   const appointments = getVisibleAppointments(store, user);
   const professionals = getVisibleProfessionals(store, user);
   const clients = getVisibleClients(store);
