@@ -1,0 +1,13 @@
+.next
+node_modules
+.env
+.env.local
+.env.*.local
+.env.production
+.vercel
+.certs/
+*.log
+.npm-cache
+data/demo-store.json
+data/app-store.json
+tsconfig.tsbuildinfo

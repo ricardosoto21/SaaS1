@@ -1,0 +1,1179 @@
+"use server";
+
+import { randomUUID } from "node:crypto";
+
+import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+
+import { requireRoleForPath } from "@/lib/auth";
+import { readStore, writeStore } from "@/lib/store";
+import { getSupabaseAdminClient, getSupabaseServerClient } from "@/lib/supabase";
+import { shouldUseSupabaseStore } from "@/lib/supabase-store";
+import type {
+  Appointment,
+  AppointmentServiceLine,
+  CategoryOption,
+  PaymentMethod,
+  Product,
+  Profile,
+  PurchaseItem,
+  Role,
+  Sale,
+  SaleItem,
+  Service,
+  SessionUser,
+} from "@/lib/types";
+import { clampNumber, slugify } from "@/lib/utils";
+
+const appPaths = [
+  "/dashboard",
+  "/agenda",
+  "/clientes",
+  "/ventas",
+  "/inventario",
+  "/compras",
+  "/gastos",
+  "/configuracion",
+];
+
+function revalidateApp() {
+  appPaths.forEach((path) => revalidatePath(path));
+}
+
+function getString(formData: FormData, key: string) {
+  return String(formData.get(key) ?? "").trim();
+}
+
+function getNumber(formData: FormData, key: string) {
+  const raw = String(formData.get(key) ?? "").replace(",", ".");
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parseJson<T>(value: string, fallback: T): T {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function withNotice(path: string, key: "error" | "success", message: string): never {
+  redirect(`${path}?${key}=${encodeURIComponent(message)}`);
+}
+
+function fail(path: string, message: string): never {
+  withNotice(path, "error", message);
+}
+
+function done(path: string, message: string): never {
+  revalidateApp();
+  withNotice(path, "success", message);
+}
+
+async function getAppOrigin() {
+  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/$/, "");
+  }
+
+  const headerStore = await headers();
+  const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host");
+  const protocol = headerStore.get("x-forwarded-proto") ?? (host?.startsWith("localhost") ? "http" : "https");
+  return host ? `${protocol}://${host}` : "http://localhost:3001";
+}
+
+function requireSupabaseAdmin(path: string) {
+  const supabase = getSupabaseAdminClient();
+  if (!supabase) {
+    fail(path, "Supabase no esta configurado.");
+  }
+  return supabase;
+}
+
+async function runSupabaseRpc(path: string, name: string, args: Record<string, unknown>) {
+  const { error } = await requireSupabaseAdmin(path).rpc(name, args);
+  if (error) {
+    fail(path, error.message);
+  }
+}
+
+async function upsertSupabaseCategory(path: string, table: string, id: string, name: string) {
+  const supabase = requireSupabaseAdmin(path);
+  const { data: existing, error: selectError } = await supabase
+    .from(table)
+    .select("id, name")
+    .ilike("name", name)
+    .maybeSingle();
+
+  if (selectError) {
+    fail(path, selectError.message);
+  }
+
+  if (existing) {
+    return { id: String(existing.id), name: String(existing.name) };
+  }
+
+  const { data, error } = await supabase.from(table).insert({ id, name }).select("id, name").single();
+  if (error) {
+    fail(path, error.message);
+  }
+
+  return { id: String(data.id), name: String(data.name) };
+}
+
+function parseRequiredDate(value: string, path: string, label: string) {
+  const date = new Date(value);
+  if (!value || !Number.isFinite(date.getTime())) {
+    fail(path, `${label} invalida.`);
+  }
+  return date.toISOString();
+}
+
+function updateSaleBalances(sale: Sale, paymentsAmount: number) {
+  const amountPaid = clampNumber(paymentsAmount);
+  const amountDue = Math.max(0, sale.total - amountPaid);
+
+  return {
+    ...sale,
+    amountPaid,
+    amountDue,
+    paymentStatus: amountDue === 0 ? "paid" : amountPaid > 0 ? "partial" : "unpaid",
+  } as Sale;
+}
+
+function upsertCategory(categoryList: CategoryOption[], name: string, prefix: string) {
+  const cleanName = name.trim();
+  const existing = categoryList.find((item) => item.name.toLowerCase() === cleanName.toLowerCase());
+  if (existing) {
+    return existing;
+  }
+
+  const category = {
+    id: `${prefix}-${slugify(cleanName) || randomUUID()}`,
+    name: cleanName,
+  };
+  categoryList.push(category);
+  return category;
+}
+
+function findService(services: Service[], serviceId: string) {
+  return services.find((item) => item.id === serviceId && item.active);
+}
+
+function findProduct(products: Product[], productId: string) {
+  return products.find((item) => item.id === productId && item.active);
+}
+
+function ensureStylistProfessional(user: SessionUser, professionalId: string, path: string) {
+  if (user.role === "estilista" && professionalId !== user.professionalId) {
+    fail(path, "No puedes operar con otro profesional.");
+  }
+}
+
+function appointmentOverlaps(
+  appointments: Appointment[],
+  professionalId: string,
+  startAt: string,
+  durationMinutes: number,
+  excludeAppointmentId?: string,
+) {
+  const start = new Date(startAt).getTime();
+  const end = start + durationMinutes * 60_000;
+
+  return appointments.some((appointment) => {
+    if (
+      appointment.id === excludeAppointmentId ||
+      appointment.professionalId !== professionalId ||
+      !["scheduled", "confirmed"].includes(appointment.status)
+    ) {
+      return false;
+    }
+
+    const appointmentStart = new Date(appointment.startAt).getTime();
+    const appointmentEnd = appointmentStart + appointment.totalDurationMinutes * 60_000;
+    return appointmentStart < end && start < appointmentEnd;
+  });
+}
+
+async function recordAudit(
+  user: SessionUser,
+  action: string,
+  entityType: string,
+  entityId?: string,
+  details: Record<string, unknown> = {},
+) {
+  if (!shouldUseSupabaseStore()) {
+    return;
+  }
+
+  const supabase = getSupabaseAdminClient();
+  await supabase?.from("audit_logs").insert({
+    actor_id: user.id,
+    actor_email: user.email,
+    action,
+    entity_type: entityType,
+    entity_id: entityId ?? null,
+    details,
+  });
+}
+
+export async function createClientAction(formData: FormData) {
+  const user = await requireRoleForPath("/clientes");
+  const store = await readStore();
+  const name = getString(formData, "name");
+  const phone = getString(formData, "phone");
+
+  if (!name || !phone) {
+    fail("/clientes", "Nombre y telefono son obligatorios.");
+  }
+
+  const client = {
+    id: `client-${randomUUID()}`,
+    name,
+    phone,
+    email: getString(formData, "email") || undefined,
+    birthday: getString(formData, "birthday") || undefined,
+    preferences: getString(formData, "preferences"),
+    notes: getString(formData, "notes"),
+    createdAt: new Date().toISOString(),
+  };
+
+  if (shouldUseSupabaseStore()) {
+    const { error } = await requireSupabaseAdmin("/clientes").from("clients").insert({
+      id: client.id,
+      full_name: client.name,
+      phone: client.phone,
+      email: client.email ?? null,
+      birthday: client.birthday || null,
+      preferences: client.preferences,
+      notes: client.notes,
+      created_at: client.createdAt,
+    });
+    if (error) {
+      fail("/clientes", error.message);
+    }
+    await recordAudit(user, "create", "client", client.id);
+    done("/clientes", "Cliente guardado.");
+  }
+
+  store.clients.unshift(client);
+  await writeStore(store);
+  await recordAudit(user, "create", "client", client.id);
+  done("/clientes", "Cliente guardado.");
+}
+
+export async function createProfessionalAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const store = await readStore();
+  const name = getString(formData, "name");
+
+  if (!name) {
+    fail("/configuracion", "Nombre obligatorio.");
+  }
+
+  const professional = {
+    id: `pro-${slugify(name) || randomUUID()}`,
+    name,
+    specialty: getString(formData, "specialty"),
+    color: getString(formData, "color") || "#0f766e",
+    active: true,
+  };
+
+  if (shouldUseSupabaseStore()) {
+    const { error } = await requireSupabaseAdmin("/configuracion").from("professionals").insert({
+      id: professional.id,
+      full_name: professional.name,
+      specialty: professional.specialty,
+      color: professional.color,
+      active: professional.active,
+    });
+    if (error) {
+      fail("/configuracion", error.message);
+    }
+    await recordAudit(user, "create", "professional", professional.id);
+    done("/configuracion", "Profesional creado.");
+  }
+
+  store.professionals.push(professional);
+  await writeStore(store);
+  await recordAudit(user, "create", "professional", professional.id);
+  done("/configuracion", "Profesional creado.");
+}
+
+export async function updateProfessionalStatusAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const store = await readStore();
+  const professionalId = getString(formData, "professionalId");
+  const active = getString(formData, "active") === "true";
+
+  if (!store.professionals.some((item) => item.id === professionalId)) {
+    fail("/configuracion", "Profesional no encontrado.");
+  }
+
+  if (shouldUseSupabaseStore()) {
+    const { error } = await requireSupabaseAdmin("/configuracion")
+      .from("professionals")
+      .update({ active })
+      .eq("id", professionalId);
+    if (error) {
+      fail("/configuracion", error.message);
+    }
+    await recordAudit(user, active ? "activate" : "deactivate", "professional", professionalId);
+    done("/configuracion", active ? "Profesional activado." : "Profesional desactivado.");
+  }
+
+  store.professionals = store.professionals.map((professional) =>
+    professional.id === professionalId ? { ...professional, active } : professional,
+  );
+  await writeStore(store);
+  await recordAudit(user, active ? "activate" : "deactivate", "professional", professionalId);
+  done("/configuracion", active ? "Profesional activado." : "Profesional desactivado.");
+}
+
+export async function createServiceAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const store = await readStore();
+  const categoryName = getString(formData, "categoryName");
+  const name = getString(formData, "name");
+
+  if (!name || !categoryName) {
+    fail("/configuracion", "Nombre y categoria son obligatorios.");
+  }
+
+  const category = upsertCategory(store.serviceCategories, categoryName, "svc-cat");
+  const service = {
+    id: `service-${slugify(name) || randomUUID()}`,
+    name,
+    categoryId: category.id,
+    categoryName: category.name,
+    durationMinutes: clampNumber(getNumber(formData, "durationMinutes"), 15),
+    basePrice: clampNumber(getNumber(formData, "basePrice")),
+    active: true,
+  };
+
+  if (shouldUseSupabaseStore()) {
+    const supabaseCategory = await upsertSupabaseCategory(
+      "/configuracion",
+      "service_categories",
+      category.id,
+      category.name,
+    );
+    const { error } = await requireSupabaseAdmin("/configuracion").from("services").insert({
+      id: service.id,
+      name: service.name,
+      category_id: supabaseCategory.id,
+      duration_minutes: service.durationMinutes,
+      base_price: service.basePrice,
+      active: service.active,
+    });
+    if (error) {
+      fail("/configuracion", error.message);
+    }
+    await recordAudit(user, "create", "service", service.id);
+    done("/configuracion", "Servicio creado.");
+  }
+
+  store.services.push(service);
+  await writeStore(store);
+  await recordAudit(user, "create", "service", service.id);
+  done("/configuracion", "Servicio creado.");
+}
+
+export async function createProductAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const store = await readStore();
+  const categoryName = getString(formData, "categoryName");
+  const name = getString(formData, "name");
+  const sku = getString(formData, "sku");
+
+  if (!name || !categoryName || !sku) {
+    fail("/configuracion", "Nombre, categoria y SKU son obligatorios.");
+  }
+
+  if (store.products.some((product) => product.sku.toLowerCase() === sku.toLowerCase())) {
+    fail("/configuracion", "Ese SKU ya existe.");
+  }
+
+  const category = upsertCategory(store.productCategories, categoryName, "prd-cat");
+  const product = {
+    id: `product-${slugify(name) || randomUUID()}`,
+    name,
+    categoryId: category.id,
+    categoryName: category.name,
+    cost: clampNumber(getNumber(formData, "cost")),
+    salePrice: clampNumber(getNumber(formData, "salePrice")),
+    currentStock: clampNumber(getNumber(formData, "currentStock")),
+    sku,
+    active: true,
+  };
+
+  if (shouldUseSupabaseStore()) {
+    const supabaseCategory = await upsertSupabaseCategory(
+      "/configuracion",
+      "product_categories",
+      category.id,
+      category.name,
+    );
+    const { error } = await requireSupabaseAdmin("/configuracion").from("products").insert({
+      id: product.id,
+      name: product.name,
+      category_id: supabaseCategory.id,
+      sku: product.sku,
+      current_cost: product.cost,
+      sale_price: product.salePrice,
+      current_stock: product.currentStock,
+      active: product.active,
+    });
+    if (error) {
+      fail("/configuracion", error.message);
+    }
+    await recordAudit(user, "create", "product", product.id);
+    done("/configuracion", "Producto creado.");
+  }
+
+  store.products.push(product);
+  await writeStore(store);
+  await recordAudit(user, "create", "product", product.id);
+  done("/configuracion", "Producto creado.");
+}
+
+export async function updateSettingsAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const store = await readStore();
+
+  store.settings = {
+    ...store.settings,
+    salonName: getString(formData, "salonName") || store.settings.salonName,
+    businessName: getString(formData, "businessName") || store.settings.businessName,
+    lowStockThreshold: clampNumber(getNumber(formData, "lowStockThreshold"), 1),
+  };
+
+  if (shouldUseSupabaseStore()) {
+    const { error } = await requireSupabaseAdmin("/configuracion").from("settings").upsert({
+      id: "default",
+      salon_name: store.settings.salonName,
+      business_name: store.settings.businessName,
+      currency: store.settings.currency,
+      locale: store.settings.locale,
+      timezone: store.settings.timezone,
+      low_stock_threshold: store.settings.lowStockThreshold,
+    });
+    if (error) {
+      fail("/configuracion", error.message);
+    }
+    await recordAudit(user, "update", "settings", "default");
+    done("/configuracion", "Ajustes guardados.");
+  }
+
+  await writeStore(store);
+  await recordAudit(user, "update", "settings", "default");
+  done("/configuracion", "Ajustes guardados.");
+}
+
+export async function createUserAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const store = await readStore();
+  const email = getString(formData, "email").toLowerCase();
+  const name = getString(formData, "name");
+  const password = getString(formData, "password");
+  const role = (getString(formData, "role") || "recepcion") as Role;
+  const professionalId = getString(formData, "professionalId") || undefined;
+
+  if (!email || !name) {
+    fail("/configuracion", "Nombre y email son obligatorios.");
+  }
+
+  if (!shouldUseSupabaseStore() && (!password || password.length < 8)) {
+    fail("/configuracion", "Clave de 8 caracteres obligatoria.");
+  }
+
+  if (!["admin", "recepcion", "estilista"].includes(role)) {
+    fail("/configuracion", "Rol invalido.");
+  }
+
+  if (role === "estilista" && !professionalId) {
+    fail("/configuracion", "Vincula un profesional al estilista.");
+  }
+
+  if (shouldUseSupabaseStore()) {
+    const supabase = getSupabaseAdminClient();
+    if (!supabase) {
+      fail("/configuracion", "Supabase no esta configurado.");
+    }
+
+    const origin = await getAppOrigin();
+    const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
+      data: { full_name: name, role },
+      redirectTo: `${origin}/auth/recovery`,
+    });
+
+    if (error || !data.user) {
+      fail("/configuracion", error?.message ?? "No se pudo invitar el usuario.");
+    }
+
+    const { error: profileError } = await supabase.from("profiles").upsert({
+      id: data.user.id,
+      full_name: name,
+      email,
+      role,
+      professional_id: professionalId ?? null,
+      active: true,
+    });
+
+    if (profileError) {
+      fail("/configuracion", profileError.message);
+    }
+
+    await recordAudit(user, "invite", "profile", data.user.id, { role });
+    done("/configuracion", "Invitacion enviada.");
+  }
+
+  if (store.profiles.some((profile) => profile.email.toLowerCase() === email)) {
+    fail("/configuracion", "Ese email ya existe.");
+  }
+
+  const profile: Profile = {
+    id: `profile-${randomUUID()}`,
+    name,
+    email,
+    password,
+    role,
+    professionalId,
+    active: true,
+  };
+
+  store.profiles.push(profile);
+  await writeStore(store);
+  await recordAudit(user, "create", "profile", profile.id, { role });
+  done("/configuracion", "Usuario creado.");
+}
+
+export async function updateProfileAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const profileId = getString(formData, "profileId");
+  const role = getString(formData, "role") as Role;
+  const professionalId = getString(formData, "professionalId") || undefined;
+  const active = getString(formData, "active") === "true";
+
+  if (!["admin", "recepcion", "estilista"].includes(role)) {
+    fail("/configuracion", "Rol invalido.");
+  }
+
+  if (profileId === user.id && !active) {
+    fail("/configuracion", "No puedes desactivar tu propio usuario.");
+  }
+
+  if (role === "estilista" && !professionalId) {
+    fail("/configuracion", "Vincula un profesional al estilista.");
+  }
+
+  if (shouldUseSupabaseStore()) {
+    const supabase = getSupabaseAdminClient();
+    const { error } = await supabase!
+      .from("profiles")
+      .update({ role, professional_id: professionalId ?? null, active })
+      .eq("id", profileId);
+    if (error) {
+      fail("/configuracion", error.message);
+    }
+    await recordAudit(user, "update", "profile", profileId, { role, active });
+    done("/configuracion", "Usuario actualizado.");
+  }
+
+  const store = await readStore();
+  store.profiles = store.profiles.map((profile) =>
+    profile.id === profileId ? { ...profile, role, professionalId, active } : profile,
+  );
+  await writeStore(store);
+  await recordAudit(user, "update", "profile", profileId, { role, active });
+  done("/configuracion", "Usuario actualizado.");
+}
+
+export async function resetUserAccessAction(formData: FormData) {
+  await requireRoleForPath("/configuracion");
+  const email = getString(formData, "email");
+
+  if (!email) {
+    fail("/configuracion", "Email obligatorio.");
+  }
+
+  if (!shouldUseSupabaseStore()) {
+    fail("/configuracion", "Reset disponible con Supabase.");
+  }
+
+  const supabase = await getSupabaseServerClient();
+  const origin = await getAppOrigin();
+  const { error } = await supabase!.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origin}/auth/recovery`,
+  });
+  if (error) {
+    fail("/configuracion", error.message);
+  }
+
+  done("/configuracion", "Correo de recuperacion enviado.");
+}
+
+export async function createAppointmentAction(formData: FormData) {
+  const user = await requireRoleForPath("/agenda");
+  const store = await readStore();
+  const professionalId = getString(formData, "professionalId");
+  ensureStylistProfessional(user, professionalId, "/agenda");
+
+  const lines = parseJson<Array<{ serviceId: string; price: number; durationMinutes: number; notes?: string }>>(
+    getString(formData, "serviceLines"),
+    [],
+  );
+
+  const normalizedLines: AppointmentServiceLine[] = lines
+    .map((line) => {
+      const service = findService(store.services, line.serviceId);
+      if (!service) {
+        return null;
+      }
+
+      return {
+        id: `appt-line-${randomUUID()}`,
+        serviceId: service.id,
+        serviceName: service.name,
+        categoryName: service.categoryName,
+        price: clampNumber(line.price || service.basePrice),
+        durationMinutes: clampNumber(line.durationMinutes || service.durationMinutes, 15),
+        notes: line.notes?.trim() || undefined,
+      };
+    })
+    .filter(Boolean) as AppointmentServiceLine[];
+
+  if (!normalizedLines.length) {
+    fail("/agenda", "Agrega al menos un servicio.");
+  }
+
+  const startAt = parseRequiredDate(getString(formData, "startAt"), "/agenda", "Fecha");
+  const totalDurationMinutes = normalizedLines.reduce((sum, line) => sum + line.durationMinutes, 0);
+
+  const appointment: Appointment = {
+    id: `appt-${randomUUID()}`,
+    clientId: getString(formData, "clientId"),
+    professionalId,
+    startAt,
+    notes: getString(formData, "notes"),
+    status: "scheduled",
+    services: normalizedLines,
+    estimatedTotal: normalizedLines.reduce((sum, line) => sum + line.price, 0),
+    totalDurationMinutes,
+    createdAt: new Date().toISOString(),
+  };
+
+  if (!appointment.clientId || !appointment.professionalId) {
+    fail("/agenda", "Cliente y profesional son obligatorios.");
+  }
+
+  if (appointmentOverlaps(store.appointments, appointment.professionalId, appointment.startAt, totalDurationMinutes)) {
+    fail("/agenda", "Ese horario ya esta ocupado por una cita agendada o confirmada.");
+  }
+
+  if (shouldUseSupabaseStore()) {
+    await runSupabaseRpc("/agenda", "create_appointment_transaction", { payload: appointment });
+    await recordAudit(user, "create", "appointment", appointment.id);
+    done("/agenda", "Cita creada.");
+  }
+
+  store.appointments.push(appointment);
+  await writeStore(store);
+  await recordAudit(user, "create", "appointment", appointment.id);
+  done("/agenda", "Cita creada.");
+}
+
+export async function updateAppointmentStatusAction(formData: FormData) {
+  const user = await requireRoleForPath("/agenda");
+  const store = await readStore();
+  const appointmentId = getString(formData, "appointmentId");
+  const status = getString(formData, "status") as Appointment["status"];
+  const appointment = store.appointments.find((item) => item.id === appointmentId);
+
+  if (!appointment) {
+    fail("/agenda", "Cita no encontrada.");
+  }
+
+  ensureStylistProfessional(user, appointment.professionalId, "/agenda");
+
+  if (!["scheduled", "confirmed", "completed", "cancelled", "no_show"].includes(status)) {
+    fail("/agenda", "Estado invalido.");
+  }
+
+  if (
+    ["scheduled", "confirmed"].includes(status) &&
+    appointmentOverlaps(
+      store.appointments,
+      appointment.professionalId,
+      appointment.startAt,
+      appointment.totalDurationMinutes,
+      appointment.id,
+    )
+  ) {
+    fail("/agenda", "Ese horario ya esta ocupado por una cita agendada o confirmada.");
+  }
+
+  if (shouldUseSupabaseStore()) {
+    await runSupabaseRpc("/agenda", "update_appointment_status_transaction", {
+      p_appointment_id: appointmentId,
+      p_status: status,
+    });
+    await recordAudit(user, "status", "appointment", appointmentId, { status });
+    done("/agenda", "Estado actualizado.");
+  }
+
+  store.appointments = store.appointments.map((item) =>
+    item.id === appointmentId ? { ...item, status } : item,
+  );
+
+  await writeStore(store);
+  await recordAudit(user, "status", "appointment", appointmentId, { status });
+  done("/agenda", "Estado actualizado.");
+}
+
+export async function convertAppointmentToSaleAction(formData: FormData) {
+  const user = await requireRoleForPath("/ventas");
+  const store = await readStore();
+  const appointmentId = getString(formData, "appointmentId");
+  const appointment = store.appointments.find((item) => item.id === appointmentId);
+
+  if (!appointment || appointment.saleId) {
+    fail("/ventas", "La cita no se puede convertir.");
+  }
+
+  const total = appointment.services.reduce((sum, item) => sum + item.price, 0);
+  const saleId = `sale-${randomUUID()}`;
+
+  if (shouldUseSupabaseStore()) {
+    await runSupabaseRpc("/ventas", "convert_appointment_to_sale_transaction", {
+      p_appointment_id: appointment.id,
+      p_sale_id: saleId,
+      p_sold_at: new Date().toISOString(),
+      p_notes: `Creada desde cita ${appointment.id}`,
+    });
+    await recordAudit(user, "convert", "appointment", appointment.id, { saleId });
+    done("/ventas", "Venta creada.");
+  }
+
+  const sale: Sale = {
+    id: saleId,
+    clientId: appointment.clientId,
+    professionalId: appointment.professionalId,
+    origin: "appointment",
+    appointmentId: appointment.id,
+    soldAt: new Date().toISOString(),
+    notes: `Creada desde cita ${appointment.id}`,
+    items: appointment.services.map((serviceLine) => ({
+      id: `sale-item-${randomUUID()}`,
+      type: "service",
+      referenceId: serviceLine.serviceId,
+      name: serviceLine.serviceName,
+      categoryName: serviceLine.categoryName,
+      quantity: 1,
+      unitPrice: serviceLine.price,
+      total: serviceLine.price,
+    })),
+    total,
+    amountPaid: 0,
+    amountDue: total,
+    paymentStatus: "unpaid",
+  };
+
+  store.sales.unshift(sale);
+  store.appointments = store.appointments.map((item) =>
+    item.id === appointment.id ? { ...item, saleId: sale.id, status: "completed" } : item,
+  );
+
+  await writeStore(store);
+  await recordAudit(user, "convert", "appointment", appointment.id, { saleId: sale.id });
+  done("/ventas", "Venta creada.");
+}
+
+export async function createSaleAction(formData: FormData) {
+  const user = await requireRoleForPath("/ventas");
+  const store = await readStore();
+  const rawItems = parseJson<Array<{ type: "service" | "product"; referenceId: string; quantity: number; unitPrice: number }>>(
+    getString(formData, "saleItems"),
+    [],
+  );
+
+  const items: SaleItem[] = rawItems
+    .map((item) => {
+      if (item.type === "service") {
+        const service = findService(store.services, item.referenceId);
+        if (!service) {
+          return null;
+        }
+
+        const quantity = clampNumber(item.quantity || 1, 1);
+        const unitPrice = clampNumber(item.unitPrice || service.basePrice);
+        return {
+          id: `sale-item-${randomUUID()}`,
+          type: "service",
+          referenceId: service.id,
+          name: service.name,
+          categoryName: service.categoryName,
+          quantity,
+          unitPrice,
+          total: quantity * unitPrice,
+        };
+      }
+
+      const product = findProduct(store.products, item.referenceId);
+      if (!product) {
+        return null;
+      }
+
+      const quantity = clampNumber(item.quantity || 1, 1);
+      if (quantity > product.currentStock) {
+        fail("/ventas", `Stock insuficiente para ${product.name}.`);
+      }
+
+      const unitPrice = clampNumber(item.unitPrice || product.salePrice);
+      return {
+        id: `sale-item-${randomUUID()}`,
+        type: "product",
+        referenceId: product.id,
+        name: product.name,
+        categoryName: product.categoryName,
+        quantity,
+        unitPrice,
+        total: quantity * unitPrice,
+      };
+    })
+    .filter(Boolean) as SaleItem[];
+
+  if (!items.length) {
+    fail("/ventas", "Agrega al menos un item.");
+  }
+
+  const clientId = getString(formData, "clientId");
+  const professionalId = getString(formData, "professionalId");
+  const soldAt = parseRequiredDate(getString(formData, "soldAt"), "/ventas", "Fecha");
+
+  if (!clientId || !professionalId) {
+    fail("/ventas", "Cliente y profesional son obligatorios.");
+  }
+
+  const total = items.reduce((sum, item) => sum + item.total, 0);
+  const saleBase: Sale = {
+    id: `sale-${randomUUID()}`,
+    clientId,
+    professionalId,
+    origin: "manual",
+    soldAt,
+    notes: getString(formData, "notes"),
+    items,
+    total,
+    amountPaid: 0,
+    amountDue: total,
+    paymentStatus: "unpaid",
+  };
+
+  store.sales.unshift(saleBase);
+
+  for (const item of items.filter((entry) => entry.type === "product")) {
+    store.products = store.products.map((product) =>
+      product.id === item.referenceId ? { ...product, currentStock: product.currentStock - item.quantity } : product,
+    );
+
+    store.inventoryMovements.unshift({
+      id: `move-${randomUUID()}`,
+      productId: item.referenceId ?? "",
+      productName: item.name,
+      type: "sale",
+      quantity: -item.quantity,
+      note: "Venta manual",
+      happenedAt: saleBase.soldAt,
+      referenceId: saleBase.id,
+    });
+  }
+
+  const initialPaymentAmount = clampNumber(getNumber(formData, "initialPaymentAmount"));
+  if (initialPaymentAmount > total) {
+    fail("/ventas", "El pago no puede superar el total.");
+  }
+
+  if (shouldUseSupabaseStore()) {
+    await runSupabaseRpc("/ventas", "create_manual_sale_transaction", {
+      payload: {
+        id: saleBase.id,
+        clientId,
+        professionalId,
+        soldAt,
+        notes: saleBase.notes,
+        items,
+        initialPayment:
+          initialPaymentAmount > 0
+            ? {
+                id: `payment-${randomUUID()}`,
+                amount: initialPaymentAmount,
+                method: (getString(formData, "initialPaymentMethod") || "cash") as PaymentMethod,
+                note: getString(formData, "initialPaymentNote"),
+              }
+            : { amount: 0 },
+      },
+    });
+    await recordAudit(user, "create", "sale", saleBase.id, { total });
+    done("/ventas", "Venta guardada.");
+  }
+
+  if (initialPaymentAmount > 0) {
+    store.payments.unshift({
+      id: `payment-${randomUUID()}`,
+      saleId: saleBase.id,
+      amount: initialPaymentAmount,
+      method: (getString(formData, "initialPaymentMethod") || "cash") as PaymentMethod,
+      paidAt: saleBase.soldAt,
+      note: getString(formData, "initialPaymentNote"),
+    });
+
+    store.sales = store.sales.map((sale) =>
+      sale.id === saleBase.id ? updateSaleBalances(sale, initialPaymentAmount) : sale,
+    );
+  }
+
+  await writeStore(store);
+  await recordAudit(user, "create", "sale", saleBase.id, { total });
+  done("/ventas", "Venta guardada.");
+}
+
+export async function recordPaymentAction(formData: FormData) {
+  const user = await requireRoleForPath("/ventas");
+  const store = await readStore();
+  const saleId = getString(formData, "saleId");
+  const amount = clampNumber(getNumber(formData, "amount"));
+
+  if (!saleId || amount <= 0) {
+    fail("/ventas", "Monto invalido.");
+  }
+
+  const sale = store.sales.find((item) => item.id === saleId);
+  if (!sale) {
+    fail("/ventas", "Venta no encontrada.");
+  }
+
+  if (sale.amountDue <= 0) {
+    fail("/ventas", "La venta ya esta pagada.");
+  }
+
+  if (amount > sale.amountDue) {
+    fail("/ventas", "El abono supera el saldo.");
+  }
+
+  const paidAt = parseRequiredDate(getString(formData, "paidAt"), "/ventas", "Fecha");
+  const paymentId = `payment-${randomUUID()}`;
+
+  if (shouldUseSupabaseStore()) {
+    await runSupabaseRpc("/ventas", "record_payment_transaction", {
+      p_sale_id: saleId,
+      p_payment_id: paymentId,
+      p_amount: amount,
+      p_method: (getString(formData, "method") || "cash") as PaymentMethod,
+      p_paid_at: paidAt,
+      p_note: getString(formData, "note"),
+    });
+    await recordAudit(user, "payment", "sale", saleId, { amount });
+    done("/ventas", "Abono guardado.");
+  }
+
+  store.payments.unshift({
+    id: paymentId,
+    saleId,
+    amount,
+    method: (getString(formData, "method") || "cash") as PaymentMethod,
+    paidAt,
+    note: getString(formData, "note"),
+  });
+
+  store.sales = store.sales.map((item) =>
+    item.id === saleId ? updateSaleBalances(item, item.amountPaid + amount) : item,
+  );
+
+  await writeStore(store);
+  await recordAudit(user, "payment", "sale", saleId, { amount });
+  done("/ventas", "Abono guardado.");
+}
+
+export async function createPurchaseAction(formData: FormData) {
+  const user = await requireRoleForPath("/compras");
+  const store = await readStore();
+  const supplier = getString(formData, "supplier");
+  const categoryName = getString(formData, "categoryName");
+
+  if (!supplier || !categoryName) {
+    fail("/compras", "Proveedor y categoria son obligatorios.");
+  }
+
+  const items = parseJson<Array<{ productId: string; quantity: number; unitCost: number }>>(
+    getString(formData, "purchaseItems"),
+    [],
+  )
+    .map((item) => {
+      const product = findProduct(store.products, item.productId);
+      if (!product) {
+        return null;
+      }
+
+      const quantity = clampNumber(item.quantity, 1);
+      const unitCost = clampNumber(item.unitCost || product.cost, 1);
+
+      const purchaseItem: PurchaseItem = {
+        id: `purchase-item-${randomUUID()}`,
+        productId: product.id,
+        productName: product.name,
+        quantity,
+        unitCost,
+        total: quantity * unitCost,
+      };
+
+      return purchaseItem;
+    })
+    .filter(Boolean) as PurchaseItem[];
+
+  if (!items.length) {
+    fail("/compras", "Agrega productos a la compra.");
+  }
+
+  const purchaseId = `purchase-${randomUUID()}`;
+  const purchasedAt = parseRequiredDate(getString(formData, "purchasedAt"), "/compras", "Fecha");
+  const total = items.reduce((sum, item) => sum + item.total, 0);
+
+  if (shouldUseSupabaseStore()) {
+    await runSupabaseRpc("/compras", "create_purchase_transaction", {
+      payload: {
+        id: purchaseId,
+        purchasedAt,
+        supplier,
+        categoryName,
+        notes: getString(formData, "notes"),
+        items,
+      },
+    });
+    await recordAudit(user, "create", "purchase", purchaseId, { total });
+    done("/compras", "Compra guardada.");
+  }
+
+  store.purchases.unshift({
+    id: purchaseId,
+    purchasedAt,
+    supplier,
+    categoryName,
+    notes: getString(formData, "notes"),
+    items,
+    total,
+  });
+
+  for (const item of items) {
+    store.products = store.products.map((product) =>
+      product.id === item.productId
+        ? {
+            ...product,
+            currentStock: product.currentStock + item.quantity,
+            cost: item.unitCost,
+          }
+        : product,
+    );
+
+    store.inventoryMovements.unshift({
+      id: `move-${randomUUID()}`,
+      productId: item.productId,
+      productName: item.productName,
+      type: "purchase",
+      quantity: item.quantity,
+      unitCost: item.unitCost,
+      note: "Ingreso por compra",
+      happenedAt: purchasedAt,
+      referenceId: purchaseId,
+    });
+  }
+
+  await writeStore(store);
+  await recordAudit(user, "create", "purchase", purchaseId, { total });
+  done("/compras", "Compra guardada.");
+}
+
+export async function adjustStockAction(formData: FormData) {
+  const user = await requireRoleForPath("/inventario");
+  const store = await readStore();
+  const productId = getString(formData, "productId");
+  const quantityChange = getNumber(formData, "quantityChange");
+  const happenedAt = parseRequiredDate(getString(formData, "happenedAt"), "/inventario", "Fecha");
+  const product = store.products.find((item) => item.id === productId);
+
+  if (!product || !quantityChange) {
+    fail("/inventario", "Producto o cantidad invalida.");
+  }
+
+  const nextStock = product.currentStock + quantityChange;
+  if (nextStock < 0) {
+    fail("/inventario", "El stock no puede quedar negativo.");
+  }
+
+  const movementId = `move-${randomUUID()}`;
+
+  if (shouldUseSupabaseStore()) {
+    await runSupabaseRpc("/inventario", "adjust_stock_transaction", {
+      p_product_id: productId,
+      p_movement_id: movementId,
+      p_quantity_change: quantityChange,
+      p_happened_at: happenedAt,
+      p_note: getString(formData, "note") || "Ajuste manual",
+    });
+    await recordAudit(user, "adjust", "product", productId, { quantityChange });
+    done("/inventario", "Stock actualizado.");
+  }
+
+  store.products = store.products.map((item) =>
+    item.id === productId ? { ...item, currentStock: nextStock } : item,
+  );
+
+  store.inventoryMovements.unshift({
+    id: movementId,
+    productId,
+    productName: product.name,
+    type: "adjustment",
+    quantity: quantityChange,
+    note: getString(formData, "note") || "Ajuste manual",
+    happenedAt,
+  });
+
+  await writeStore(store);
+  await recordAudit(user, "adjust", "product", productId, { quantityChange });
+  done("/inventario", "Stock actualizado.");
+}
+
+export async function createExpenseAction(formData: FormData) {
+  const user = await requireRoleForPath("/gastos");
+  const store = await readStore();
+  const categoryName = getString(formData, "categoryName");
+  const description = getString(formData, "description");
+  const amount = clampNumber(getNumber(formData, "amount"));
+
+  if (!categoryName || !description || amount <= 0) {
+    fail("/gastos", "Categoria, descripcion y monto son obligatorios.");
+  }
+
+  const category = upsertCategory(store.expenseCategories, categoryName, "exp-cat");
+  const expense = {
+    id: `expense-${randomUUID()}`,
+    spentAt: parseRequiredDate(getString(formData, "spentAt"), "/gastos", "Fecha"),
+    categoryId: category.id,
+    categoryName: category.name,
+    description,
+    amount,
+  };
+
+  if (shouldUseSupabaseStore()) {
+    await runSupabaseRpc("/gastos", "create_expense_transaction", { payload: expense });
+    await recordAudit(user, "create", "expense", expense.id, { amount });
+    done("/gastos", "Gasto guardado.");
+  }
+
+  store.expenses.unshift(expense);
+  await writeStore(store);
+  await recordAudit(user, "create", "expense", expense.id, { amount });
+  done("/gastos", "Gasto guardado.");
+}
