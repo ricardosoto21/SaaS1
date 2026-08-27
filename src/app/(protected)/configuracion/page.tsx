@@ -8,6 +8,7 @@ import { PageNotice } from "@/components/page-notice";
 import {
   connectSumUpAction,
   disconnectSumUpAction,
+  createCommissionRuleAction,
   createProductAction,
   createProfessionalAction,
   assignProfessionalBranchAction,
@@ -16,10 +17,12 @@ import {
   removeProfessionalBranchAction,
   resetUserAccessAction,
   updateProfessionalStatusAction,
+  updateCommissionSettingsAction,
   updateProfileAction,
   updateSettingsAction,
 } from "@/lib/actions";
 import { getAccessibleBranches, requireSession } from "@/lib/auth";
+import { getSupabaseServerClient } from "@/lib/supabase";
 import { roleCanAccess } from "@/lib/data";
 import { readStore } from "@/lib/store";
 import { shouldUseSupabaseStore } from "@/lib/supabase-store";
@@ -40,6 +43,9 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
   const branches = await getAccessibleBranches();
   const params = (await searchParams) ?? {};
   const usesSupabase = shouldUseSupabaseStore();
+  const supabase = await getSupabaseServerClient();
+  const commissionResponse = supabase ? await supabase.from("commission_rules").select("id,professional_id,kind,rate,active").eq("organization_id", user.organizationId ?? "").eq("active", true).order("created_at", { ascending: false }) : { data: [] };
+  const commissionRules = commissionResponse.data ?? [];
 
   return (
     <div className="space-y-4">
@@ -56,6 +62,12 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
           <SubmitButton label="Conectar SumUp" pendingLabel="Conectando..." />
         </form>
         <form action={disconnectSumUpAction} className="mt-3"><button className="btn-secondary" type="submit">Desconectar</button></form>
+      </section>
+      <section className="surface rounded-[1rem] p-5">
+        <p className="label">Comisiones</p><h2 className="mt-1 text-xl font-semibold">Reglas por profesional</h2>
+        <form action={updateCommissionSettingsAction} className="mt-4 flex items-center gap-3"><select className="select-base !w-auto" name="enabled"><option value="true">Activadas</option><option value="false">Desactivadas</option></select><button className="btn-secondary" type="submit">Guardar estado</button></form>
+        <form action={createCommissionRuleAction} className="mt-4 grid gap-3 md:grid-cols-3"><select className="select-base" name="professionalId" required>{store.professionals.filter((item) => item.active).map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}</select><select className="select-base" name="kind"><option value="service_percent">% servicios</option><option value="product_percent">% productos</option><option value="fixed">Monto fijo</option></select><input className="input-base" min={0} name="rate" placeholder="Valor" required type="number"/><button className="btn-secondary md:col-span-3" type="submit">Agregar regla</button></form>
+        <div className="mt-4 text-sm text-stone-600">{commissionRules.length ? commissionRules.map((rule) => `${store.professionals.find((professional) => professional.id === rule.professional_id)?.name ?? "Profesional"}: ${rule.kind} ${rule.rate}`).join(" · ") : "Sin reglas activas."}</div>
       </section>
       <section className="grid gap-4 xl:grid-cols-2">
         <article className="surface rounded-[1rem] p-5">
@@ -207,6 +219,12 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
           <SubmitButton label="Conectar SumUp" pendingLabel="Conectando..." />
         </form>
         <form action={disconnectSumUpAction} className="mt-3"><button className="btn-secondary" type="submit">Desconectar</button></form>
+      </section>
+      <section className="surface rounded-[1rem] p-5">
+        <p className="label">Comisiones</p><h2 className="mt-1 text-xl font-semibold">Reglas por profesional</h2>
+        <form action={updateCommissionSettingsAction} className="mt-4 flex items-center gap-3"><select className="select-base !w-auto" name="enabled"><option value="true">Activadas</option><option value="false">Desactivadas</option></select><button className="btn-secondary" type="submit">Guardar estado</button></form>
+        <form action={createCommissionRuleAction} className="mt-4 grid gap-3 md:grid-cols-3"><select className="select-base" name="professionalId" required>{store.professionals.filter((item) => item.active).map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}</select><select className="select-base" name="kind"><option value="service_percent">% servicios</option><option value="product_percent">% productos</option><option value="fixed">Monto fijo</option></select><input className="input-base" min={0} name="rate" placeholder="Valor" required type="number"/><button className="btn-secondary md:col-span-3" type="submit">Agregar regla</button></form>
+        <div className="mt-4 text-sm text-stone-600">{commissionRules.length ? commissionRules.map((rule) => `${store.professionals.find((professional) => professional.id === rule.professional_id)?.name ?? "Profesional"}: ${rule.kind} ${rule.rate}`).join(" · ") : "Sin reglas activas."}</div>
       </section>
       <section className="grid gap-4 xl:grid-cols-2">
         <article className="surface rounded-[1rem] p-5">

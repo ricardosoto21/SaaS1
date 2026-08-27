@@ -1473,3 +1473,30 @@ export async function createSupplierAction(formData: FormData) {
   await recordAudit(user, "create", "supplier", name);
   done("/compras", "Proveedor guardado.");
 }
+export async function updateCommissionSettingsAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  if (!shouldUseSupabaseStore()) fail("/configuracion", "Requiere Supabase.");
+  const enabled = getString(formData, "enabled") === "true";
+  const { error } = await (await requireSupabaseUser("/configuracion")).from("settings").update({ commissions_enabled: enabled }).eq("organization_id", tenant.organizationId);
+  if (error) fail("/configuracion", "No se pudo actualizar comisiones.");
+  await recordAudit(user, "update", "commission_settings", "default", { enabled });
+  done("/configuracion", enabled ? "Comisiones activadas." : "Comisiones desactivadas.");
+}
+
+export async function createCommissionRuleAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  const professionalId = getString(formData, "professionalId");
+  const kind = getString(formData, "kind");
+  const rate = clampNumber(getNumber(formData, "rate"));
+  if (!professionalId || !["service_percent", "product_percent", "fixed"].includes(kind) || rate < 0) fail("/configuracion", "Regla de comisión inválida.");
+  if (!shouldUseSupabaseStore()) fail("/configuracion", "Requiere Supabase.");
+  const supabase = await requireSupabaseUser("/configuracion");
+  const { data: professional } = await supabase.from("professionals").select("id").eq("id", professionalId).eq("organization_id", tenant.organizationId).maybeSingle();
+  if (!professional) fail("/configuracion", "Profesional no encontrado.");
+  const { error } = await supabase.from("commission_rules").insert({ organization_id: tenant.organizationId, professional_id: professionalId, kind, rate, active: true });
+  if (error) fail("/configuracion", "No se pudo guardar la regla.");
+  await recordAudit(user, "create", "commission_rule", professionalId, { kind, rate });
+  done("/configuracion", "Regla de comisión guardada.");
+}
