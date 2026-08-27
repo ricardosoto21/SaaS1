@@ -1,4 +1,5 @@
 import { PackagePlus, Scissors, Settings, UserCog, UserPlus } from "lucide-react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { EmptyState } from "@/components/empty-state";
@@ -52,6 +53,7 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
     <div className="space-y-4">
       <PageHeader description="Ajustes y catalogos." eyebrow="Configuracion" title="Base del negocio" />
       <PageNotice searchParams={params} />
+      <Link className="btn-secondary" href="/configuracion/catalogo">Ajustar catálogo por sucursal</Link>
 
             <section className="surface rounded-[1rem] p-5">
         <p className="label">Sucursales</p>

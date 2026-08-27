@@ -1490,3 +1490,46 @@ export async function requestSubscriptionCancellationAction(formData: FormData) 
   await recordAudit(user, "cancellation_requested", "subscription", user.organizationId);
   done("/suscripcion", "Cancelacion solicitada. Tus datos se conservaran durante 30 dias tras el fin del periodo.");
 }
+export async function upsertServiceBranchPricingAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  const branchId = getString(formData, "branchId");
+  const serviceId = getString(formData, "serviceId");
+  const price = clampNumber(getNumber(formData, "price"));
+  const durationMinutes = clampNumber(getNumber(formData, "durationMinutes"), 5);
+  const active = getString(formData, "active") !== "false";
+  if (!branchId || !serviceId || durationMinutes < 5) fail("/configuracion", "Datos de servicio invalidos.");
+  if (!shouldUseSupabaseStore()) fail("/configuracion", "Requiere Supabase.");
+  const supabase = await requireSupabaseUser("/configuracion");
+  const [{ data: branch }, { data: service }] = await Promise.all([
+    supabase.from("branches").select("id").eq("id", branchId).eq("organization_id", tenant.organizationId).maybeSingle(),
+    supabase.from("services").select("id").eq("id", serviceId).eq("organization_id", tenant.organizationId).maybeSingle(),
+  ]);
+  if (!branch || !service) fail("/configuracion", "Sucursal o servicio no encontrado.");
+  const { error } = await supabase.from("service_branch_pricing").upsert({ organization_id: tenant.organizationId, branch_id: branchId, service_id: serviceId, price, duration_minutes: durationMinutes, active, updated_at: new Date().toISOString() });
+  if (error) fail("/configuracion", "No se pudo guardar el precio por sucursal.");
+  await recordAudit(user, "update", "service_branch_pricing", serviceId, { branchId, price, durationMinutes, active });
+  done("/configuracion", "Ajuste por sucursal guardado.");
+}
+
+export async function upsertProfessionalServiceOverrideAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  const branchId = getString(formData, "branchId");
+  const professionalId = getString(formData, "professionalId");
+  const serviceId = getString(formData, "serviceId");
+  const priceRaw = getString(formData, "price");
+  const durationRaw = getString(formData, "durationMinutes");
+  const active = getString(formData, "active") !== "false";
+  if (!branchId || !professionalId || !serviceId) fail("/configuracion", "Datos de profesional invalidos.");
+  if (!shouldUseSupabaseStore()) fail("/configuracion", "Requiere Supabase.");
+  const price = priceRaw ? clampNumber(Number(priceRaw)) : null;
+  const durationMinutes = durationRaw ? clampNumber(Number(durationRaw), 5) : null;
+  const supabase = await requireSupabaseUser("/configuracion");
+  const { data: assignment } = await supabase.from("professional_branches").select("professional_id").eq("organization_id", tenant.organizationId).eq("professional_id", professionalId).eq("branch_id", branchId).eq("active", true).maybeSingle();
+  if (!assignment) fail("/configuracion", "El profesional no trabaja en esa sucursal.");
+  const { error } = await supabase.from("professional_service_overrides").upsert({ organization_id: tenant.organizationId, branch_id: branchId, professional_id: professionalId, service_id: serviceId, price, duration_minutes: durationMinutes, active, updated_at: new Date().toISOString() });
+  if (error) fail("/configuracion", "No se pudo guardar el ajuste del profesional.");
+  await recordAudit(user, "update", "professional_service_override", serviceId, { branchId, professionalId, price, durationMinutes, active });
+  done("/configuracion", "Ajuste del profesional guardado.");
+}
