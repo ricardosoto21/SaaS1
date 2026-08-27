@@ -1138,6 +1138,8 @@ export async function createPurchaseAction(formData: FormData) {
   const tenant = tenantScopeFromUser(user);
   const store = await readStore(user);
   const supplier = getString(formData, "supplier");
+  const supplierId = getString(formData, "supplierId");
+  const amountPaid = clampNumber(getNumber(formData, "amountPaid"));
   const categoryName = getString(formData, "categoryName");
 
   if (!supplier || !categoryName) {
@@ -1434,4 +1436,15 @@ export async function setOrganizationSubscriptionAction(formData: FormData) {
   if (error || !subscription) fail("/super-admin", "No se pudo actualizar la suscripcion.");
   await supabase.from("subscription_events").insert({ organization_id: organizationId, subscription_id: subscription.id, action: "subscription_updated", actor_id: user.id, details: { planId, status, periodEnd } });
   done("/super-admin", "Suscripcion actualizada.");
+}
+export async function createSupplierAction(formData: FormData) {
+  const user = await requireRoleForPath("/compras");
+  const tenant = tenantScopeFromUser(user);
+  const name = getString(formData, "name");
+  if (name.length < 2) fail("/compras", "Nombre de proveedor invalido.");
+  if (!shouldUseSupabaseStore()) fail("/compras", "Requiere Supabase.");
+  const { error } = await (await requireSupabaseUser("/compras")).from("suppliers").insert({ organization_id: tenant.organizationId, name, legal_name: getString(formData, "legalName") || null, tax_id: getString(formData, "taxId") || null, contact_name: getString(formData, "contactName") || null, email: getString(formData, "email") || null, phone: getString(formData, "phone") || null, address: getString(formData, "address") || null, notes: getString(formData, "notes") });
+  if (error) fail("/compras", "No se pudo guardar el proveedor.");
+  await recordAudit(user, "create", "supplier", name);
+  done("/compras", "Proveedor guardado.");
 }

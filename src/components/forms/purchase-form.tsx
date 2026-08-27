@@ -9,9 +9,10 @@ import { SubmitButton } from "./submit-button";
 interface PurchaseFormProps {
   action: (formData: FormData) => void | Promise<void>;
   products: Product[];
+  suppliers?: Array<{ id: string; name: string }>;
 }
 
-export function PurchaseForm({ action, products }: PurchaseFormProps) {
+export function PurchaseForm({ action, products, suppliers = [] }: PurchaseFormProps) {
   const [items, setItems] = useState([
     {
       productId: products[0]?.id ?? "",
@@ -59,13 +60,17 @@ export function PurchaseForm({ action, products }: PurchaseFormProps) {
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
           <label className="label">Proveedor</label>
-          <input className="input-base" name="supplier" placeholder="Proveedor" required />
+          <select className="select-base" name="supplierId"><option value="">Proveedor no registrado</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select><input className="input-base mt-2" name="supplier" placeholder="Proveedor" required />
         </div>
         <div className="space-y-2">
           <label className="label">Categoria</label>
           <input className="input-base" name="categoryName" placeholder="Categoria" required />
         </div>
-        <div className="space-y-2 md:col-span-2">
+        <div className="space-y-2">
+          <label className="label">Abono inicial</label>
+          <input className="input-base" min={0} name="amountPaid" defaultValue={0} type="number" />
+        </div>
+        <div className="space-y-2">
           <label className="label">Fecha de compra</label>
           <input
             className="input-base"

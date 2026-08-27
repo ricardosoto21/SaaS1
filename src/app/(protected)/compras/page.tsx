@@ -6,11 +6,12 @@ import { PurchaseForm } from "@/components/forms/purchase-form";
 import { PageHeader } from "@/components/page-header";
 import { PageNotice } from "@/components/page-notice";
 import { Pagination } from "@/components/pagination";
-import { createPurchaseAction } from "@/lib/actions";
+import { createPurchaseAction, createSupplierAction } from "@/lib/actions";
 import { requireSession } from "@/lib/auth";
 import { getCurrentMonthRange, getVisiblePurchases, roleCanAccess } from "@/lib/data";
 import { getParam, isInsideOptionalRange, matchesQuery, paginateItems, uniqueValues } from "@/lib/listing";
 import { readStore } from "@/lib/store";
+import { getSupabaseServerClient } from "@/lib/supabase";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +30,9 @@ export default async function ComprasPage({ searchParams }: ComprasPageProps) {
   const store = await readStore(user);
   const purchases = getVisiblePurchases(store);
   const currentMonth = getCurrentMonthRange();
+  const supabase = await getSupabaseServerClient();
+  const supplierResponse = supabase ? await supabase.from("suppliers").select("id,name,phone,email").eq("organization_id", user.organizationId ?? "").eq("active", true).order("name") : { data: [] };
+  const suppliers = supplierResponse.data ?? [];
   const filters = {
     from: getParam(params, "from") || currentMonth.from,
     to: getParam(params, "to") || currentMonth.to,
@@ -55,8 +59,13 @@ export default async function ComprasPage({ searchParams }: ComprasPageProps) {
       <PageHeader description="Entradas de stock." eyebrow="Compras" title="Compras" />
       <PageNotice searchParams={params} />
 
+      <section className="surface rounded-[1rem] p-5">
+        <p className="label">Proveedores</p><h2 className="mt-1 text-xl font-semibold">Nuevo proveedor</h2>
+        <form action={createSupplierAction} className="mt-4 grid gap-3 md:grid-cols-3"><input className="input-base" name="name" placeholder="Nombre" required/><input className="input-base" name="legalName" placeholder="Razón social"/><input className="input-base" name="taxId" placeholder="RUT"/><input className="input-base" name="contactName" placeholder="Contacto"/><input className="input-base" name="email" placeholder="Email" type="email"/><input className="input-base" name="phone" placeholder="Teléfono"/><button className="btn-secondary md:col-span-3" type="submit">Guardar proveedor</button></form>
+        {suppliers.length ? <p className="mt-4 text-sm text-stone-600">{suppliers.map((supplier) => supplier.name).join(" · ")}</p> : null}
+      </section>
       <section className="grid gap-4 xl:grid-cols-[0.88fr_1.12fr]">
-        <PurchaseForm action={createPurchaseAction} products={store.products.filter((item) => item.active)} />
+        <PurchaseForm action={createPurchaseAction} products={store.products.filter((item) => item.active)} suppliers={suppliers.map((supplier) => ({ id: String(supplier.id), name: String(supplier.name) }))} />
 
         <article className="surface rounded-[1.8rem] p-5">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
