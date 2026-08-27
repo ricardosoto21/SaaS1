@@ -833,13 +833,22 @@ export async function updateAppointmentStatusAction(formData: FormData) {
   }
 
   if (shouldUseSupabaseStore()) {
-    await runSupabaseRpc("/agenda", "tenant_update_appointment_status_transaction", {
-      p_appointment_id: appointmentId,
-      p_status: status,
-      p_organization_id: tenant.organizationId,
-    });
+    if (status === "cancelled") {
+      await runSupabaseRpc("/agenda", "tenant_cancel_appointment_transaction", {
+        p_appointment_id: appointmentId,
+        p_organization_id: tenant.organizationId,
+        p_cancelled_by: getString(formData, "cancelledBy") || "staff",
+        p_reason: getString(formData, "cancellationReason"),
+      });
+    } else {
+      await runSupabaseRpc("/agenda", "tenant_update_appointment_status_transaction", {
+        p_appointment_id: appointmentId,
+        p_status: status,
+        p_organization_id: tenant.organizationId,
+      });
+    }
     await recordAudit(user, "status", "appointment", appointmentId, { status });
-    done("/agenda", "Estado actualizado.");
+    done("/agenda", status === "cancelled" ? "Cita cancelada. Revisa el reembolso pendiente si corresponde." : "Estado actualizado.");
   }
 
   store.appointments = store.appointments.map((item) =>
