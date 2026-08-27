@@ -84,6 +84,7 @@ export interface Product {
   salePrice: number;
   currentStock: number;
   sku: string;
+  barcode?: string;
   active: boolean;
 }
 

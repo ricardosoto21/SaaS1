@@ -58,7 +58,7 @@ export default async function InventarioPage({ searchParams }: InventarioPagePro
     const stockStatus = product.currentStock <= store.settings.lowStockThreshold ? "low" : "healthy";
     const activeStatus = product.active ? "active" : "inactive";
     return (
-      matchesQuery(productFilters.q, [product.name, product.categoryName, product.sku]) &&
+      matchesQuery(productFilters.q, [product.name, product.categoryName, product.sku, product.barcode ?? ""]) &&
       (!productFilters.category || product.categoryName === productFilters.category) &&
       (!productFilters.stockStatus || productFilters.stockStatus === stockStatus) &&
       (!productFilters.active || productFilters.active === activeStatus)
@@ -155,7 +155,7 @@ export default async function InventarioPage({ searchParams }: InventarioPagePro
                   <tr>
                     <th className="pb-3">Producto</th>
                     <th className="pb-3">Categoria</th>
-                    <th className="pb-3">SKU</th>
+                    <th className="pb-3">SKU / código</th>
                     <th className="pb-3">Costo</th>
                     <th className="pb-3">Precio</th>
                     <th className="pb-3">Stock</th>
@@ -167,7 +167,7 @@ export default async function InventarioPage({ searchParams }: InventarioPagePro
                     <tr key={product.id}>
                       <td className="py-4 font-medium">{product.name}</td>
                       <td className="py-4 text-stone-600">{product.categoryName}</td>
-                      <td className="py-4 text-stone-500">{product.sku}</td>
+                      <td className="py-4 text-stone-500">{product.sku}{product.barcode ? ` · ${product.barcode}` : ""}</td>
                       <td className="py-4">{formatCurrency(product.cost)}</td>
                       <td className="py-4">{formatCurrency(product.salePrice)}</td>
                       <td className="py-4 font-semibold">{product.currentStock}</td>

@@ -255,7 +255,7 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
           <form action={createProductAction} className="mt-5 space-y-4">
             <input className="input-base" name="name" placeholder="Nombre" required />
             <input className="input-base" name="categoryName" placeholder="Categoria" required />
-            <input className="input-base" name="sku" placeholder="SKU" required />
+            <input className="input-base" name="sku" placeholder="SKU" required /><input className="input-base" name="barcode" placeholder="Código de barras" />
             <input className="input-base" min={0} name="cost" placeholder="Costo" required type="number" />
             <input className="input-base" min={0} name="salePrice" placeholder="Precio venta" required type="number" />
             <input className="input-base" min={0} name="currentStock" placeholder="Stock inicial" required type="number" />

@@ -465,6 +465,7 @@ export async function createProductAction(formData: FormData) {
     salePrice: clampNumber(getNumber(formData, "salePrice")),
     currentStock: clampNumber(getNumber(formData, "currentStock")),
     sku,
+    barcode: getString(formData, "barcode") || undefined,
     active: true,
   };
 
@@ -483,6 +484,7 @@ export async function createProductAction(formData: FormData) {
       name: product.name,
       category_id: supabaseCategory.id,
       sku: product.sku,
+      barcode: product.barcode ?? null,
       current_cost: product.cost,
       sale_price: product.salePrice,
       current_stock: product.currentStock,

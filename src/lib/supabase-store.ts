@@ -189,6 +189,7 @@ export async function readSupabaseStore(scope: TenantScope): Promise<AppStore> {
       salePrice: asNumber(row.sale_price),
       currentStock: asNumber(row.current_stock),
       sku: asString(row.sku),
+      barcode: asString(row.barcode) || undefined,
       active: asBoolean(row.active, true),
     };
   });

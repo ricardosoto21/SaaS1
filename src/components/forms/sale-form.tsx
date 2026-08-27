@@ -30,6 +30,7 @@ export function SaleForm({ action, clients, professionals, services, products }:
     !hasCatalog ? "servicios o productos" : "",
   ].filter(Boolean);
 
+  const [productQuery, setProductQuery] = useState("");
   const [items, setItems] = useState<DraftItem[]>([
     {
       type: defaultType,
@@ -39,6 +40,13 @@ export function SaleForm({ action, clients, professionals, services, products }:
     },
   ]);
 
+  function addProductByQuery() {
+    const needle = productQuery.trim().toLowerCase();
+    const product = products.find((item) => item.name.toLowerCase() === needle || item.sku.toLowerCase() === needle || item.barcode?.toLowerCase() === needle);
+    if (!product) return;
+    setItems((current) => [...current, { type: "product", referenceId: product.id, quantity: 1, unitPrice: product.salePrice }]);
+    setProductQuery("");
+  }
   if (missing.length) {
     return (
       <section className="surface rounded-[1rem] p-5">
@@ -128,6 +136,7 @@ export function SaleForm({ action, clients, professionals, services, products }:
         </div>
       </div>
 
+      <div className="mt-6 rounded-2xl border border-stone-200 bg-white/60 p-4"><p className="label">Agregar por código</p><div className="mt-2 flex gap-2"><input className="input-base" value={productQuery} onChange={(event) => setProductQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addProductByQuery(); } }} placeholder="Nombre, SKU o código de barras"/><button className="btn-secondary" onClick={addProductByQuery} type="button">Agregar</button></div></div>
       <div className="mt-6 space-y-3">
         <div className="flex items-center justify-between">
           <p className="label">Items</p>
