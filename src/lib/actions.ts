@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { z } from "zod";
 
 import { getSessionUser, requireRoleForPath, requireSession } from "@/lib/auth";
 import { readStore, writeStore } from "@/lib/store";
@@ -38,6 +39,14 @@ const appPaths = [
   "/gastos",
   "/configuracion",
 ];
+
+const payablePaymentSchema = z.object({
+  id: z.string().min(1).max(200),
+  amount: z.number().positive().finite(),
+  method: z.enum(["cash", "transfer", "card", "mercado_pago", "other"]),
+  paidAt: z.string().datetime({ offset: true }),
+  note: z.string().max(500),
+});
 
 function revalidateApp() {
   appPaths.forEach((path) => revalidatePath(path));
@@ -1116,6 +1125,54 @@ export async function recordPaymentAction(formData: FormData) {
   await writeStore(store, user);
   await recordAudit(user, "payment", "sale", saleId, { amount });
   done("/ventas", "Abono guardado.");
+}
+
+export async function recordPurchasePayablePaymentAction(formData: FormData) {
+  const user = await requireRoleForPath("/compras");
+  if (user.role !== "admin") fail("/compras", "No tienes permiso para pagar proveedores.");
+  const tenant = tenantScopeFromUser(user);
+  const purchaseId = getString(formData, "purchaseId");
+  const amount = clampNumber(getNumber(formData, "amount"));
+  const paidAt = parseRequiredDate(getString(formData, "paidAt"), "/compras", "Fecha");
+  const parsed = payablePaymentSchema.safeParse({ id: purchaseId, amount, method: getString(formData, "method") || "transfer", paidAt, note: getString(formData, "note") });
+  if (!parsed.success) fail("/compras", "Datos de abono invalidos.");
+  if (!shouldUseSupabaseStore()) fail("/compras", "Esta funcion requiere la base de datos conectada.");
+  await runSupabaseRpc("/compras", "tenant_record_purchase_payable_payment", {
+    p_purchase_id: purchaseId,
+    p_payment_id: `payable-payment-${randomUUID()}`,
+    p_amount: parsed.data.amount,
+    p_method: parsed.data.method as PaymentMethod,
+    p_paid_at: parsed.data.paidAt,
+    p_note: parsed.data.note,
+    p_organization_id: tenant.organizationId,
+    p_branch_id: tenant.branchId,
+  });
+  await recordAudit(user, "payment", "purchase", purchaseId, { amount });
+  done("/compras", "Abono a proveedor guardado.");
+}
+
+export async function recordExpensePayablePaymentAction(formData: FormData) {
+  const user = await requireRoleForPath("/gastos");
+  if (user.role !== "admin") fail("/gastos", "No tienes permiso para pagar gastos.");
+  const tenant = tenantScopeFromUser(user);
+  const expenseId = getString(formData, "expenseId");
+  const amount = clampNumber(getNumber(formData, "amount"));
+  const paidAt = parseRequiredDate(getString(formData, "paidAt"), "/gastos", "Fecha");
+  const parsed = payablePaymentSchema.safeParse({ id: expenseId, amount, method: getString(formData, "method") || "transfer", paidAt, note: getString(formData, "note") });
+  if (!parsed.success) fail("/gastos", "Datos de pago invalidos.");
+  if (!shouldUseSupabaseStore()) fail("/gastos", "Esta funcion requiere la base de datos conectada.");
+  await runSupabaseRpc("/gastos", "tenant_record_expense_payable_payment", {
+    p_expense_id: expenseId,
+    p_payment_id: `payable-payment-${randomUUID()}`,
+    p_amount: parsed.data.amount,
+    p_method: parsed.data.method as PaymentMethod,
+    p_paid_at: parsed.data.paidAt,
+    p_note: parsed.data.note,
+    p_organization_id: tenant.organizationId,
+    p_branch_id: tenant.branchId,
+  });
+  await recordAudit(user, "payment", "expense", expenseId, { amount });
+  done("/gastos", "Gasto pagado.");
 }
 
 export async function createPurchaseAction(formData: FormData) {

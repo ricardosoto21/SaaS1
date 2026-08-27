@@ -6,7 +6,7 @@ import { PurchaseForm } from "@/components/forms/purchase-form";
 import { PageHeader } from "@/components/page-header";
 import { PageNotice } from "@/components/page-notice";
 import { Pagination } from "@/components/pagination";
-import { createPurchaseAction, createSupplierAction } from "@/lib/actions";
+import { createPurchaseAction, createSupplierAction, recordPurchasePayablePaymentAction } from "@/lib/actions";
 import { requireSession } from "@/lib/auth";
 import { getCurrentMonthRange, getVisiblePurchases, roleCanAccess } from "@/lib/data";
 import { getParam, isInsideOptionalRange, matchesQuery, paginateItems, uniqueValues } from "@/lib/listing";
@@ -31,8 +31,12 @@ export default async function ComprasPage({ searchParams }: ComprasPageProps) {
   const purchases = getVisiblePurchases(store);
   const currentMonth = getCurrentMonthRange();
   const supabase = await getSupabaseServerClient();
-  const supplierResponse = supabase ? await supabase.from("suppliers").select("id,name,phone,email").eq("organization_id", user.organizationId ?? "").eq("active", true).order("name") : { data: [] };
+  const [supplierResponse, payableResponse] = await Promise.all([
+    supabase ? supabase.from("suppliers").select("id,name,phone,email").eq("organization_id", user.organizationId ?? "").eq("active", true).order("name") : { data: [] },
+    supabase ? supabase.from("purchases").select("id,amount_paid,amount_due").eq("organization_id", user.organizationId ?? "").eq("branch_id", user.branchId ?? "") : { data: [] },
+  ]);
   const suppliers = supplierResponse.data ?? [];
+  const payablesByPurchase = new Map((payableResponse.data ?? []).map((item) => [String(item.id), { paid: Number(item.amount_paid ?? 0), due: Number(item.amount_due ?? 0) }]));
   const filters = {
     from: getParam(params, "from") || currentMonth.from,
     to: getParam(params, "to") || currentMonth.to,
@@ -105,6 +109,7 @@ export default async function ComprasPage({ searchParams }: ComprasPageProps) {
                     <th className="pb-3">Categoria</th>
                     <th className="pb-3">Items</th>
                     <th className="pb-3">Total</th>
+                    <th className="pb-3">Saldo</th>
                     <th className="pb-3">Detalle</th>
                   </tr>
                 </thead>
@@ -116,6 +121,14 @@ export default async function ComprasPage({ searchParams }: ComprasPageProps) {
                       <td className="py-4 text-stone-600">{purchase.categoryName}</td>
                       <td className="py-4 text-stone-600">{purchase.items.length}</td>
                       <td className="py-4 font-semibold">{formatCurrency(purchase.total)}</td>
+                      <td className="py-4">
+                        {(() => {
+                          const payable = payablesByPurchase.get(purchase.id);
+                          if (!payable || payable.due <= 0) return <span className="text-stone-500">Pagado</span>;
+                          if (user.role !== "admin") return <span className="text-stone-500">{formatCurrency(payable.due)}</span>;
+                          return <details><summary className="cursor-pointer font-semibold text-orange-700">{formatCurrency(payable.due)}</summary><form action={recordPurchasePayablePaymentAction} className="mt-3 grid gap-2 rounded-xl bg-stone-50 p-3"><input name="purchaseId" type="hidden" value={purchase.id}/><input className="input-base" defaultValue={payable.due} max={payable.due} min={1} name="amount" type="number"/><select className="select-base" defaultValue="transfer" name="method"><option value="transfer">Transferencia</option><option value="cash">Efectivo</option><option value="card">Tarjeta</option><option value="other">Otro</option></select><input className="input-base" defaultValue={new Date().toISOString().slice(0, 16)} name="paidAt" required type="datetime-local"/><input className="input-base" name="note" placeholder="Nota"/><button className="btn-primary !py-2 text-sm" type="submit">Registrar abono</button></form></details>;
+                        })()}
+                      </td>
                       <td className="py-4">
                         <details>
                           <summary className="cursor-pointer font-semibold text-stone-700">Ver</summary>

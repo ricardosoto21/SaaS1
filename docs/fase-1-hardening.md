@@ -35,14 +35,18 @@ Ademas de RLS, `assert_branch_matches_organization` rechaza cualquier `branch_id
 | `tenant_create_purchase_transaction` | compra, items, stock | si / si | si | authenticated |
 | `tenant_adjust_stock_transaction` | ajuste y movimiento | si / si | si | authenticated |
 | `tenant_create_expense_transaction` | gasto | si / si | si | authenticated |
+| `tenant_record_purchase_payable_payment` | abono de compra | si / si | si | authenticated/admin |
+| `tenant_record_expense_payable_payment` | pago de gasto pendiente | si / si | si | authenticated/admin |
 | `set_active_branch` | cambiar sucursal | si / si | si | authenticated |
 | `record_tenant_audit` | evento de seguridad | si / si | si | authenticated |
 
 Todas las RPC de negocio pasan por `assert_tenant_access`, toman el actor desde `auth.uid()` y fijan `search_path`. Los identificadores enviados por cliente se verifican contra tenant y sucursal antes de modificar filas. Los errores remotos se reducen a `Access denied` o `Resource not found`, sin revelar pertenencia de otro tenant.
 
+`payable_payments` no permite inserciones directas a `authenticated`: sus filas solo se crean desde las RPC de abono, que actualizan el pago y el saldo en una misma transaccion.
+
 ## service_role
 
-La aplicacion usa `service_role` solamente en `auth.admin.inviteUserByEmail`, que es una operacion administrativa de Supabase Auth. No se utiliza para consultas ni mutaciones normales de clientes, agenda, ventas, inventario, compras o gastos. Los fixtures de integracion lo usan para crear y desmontar datos temporales; nunca se envian al navegador.
+No se utiliza para consultas ni mutaciones normales de clientes, agenda, ventas, inventario, compras o gastos. Los usos restantes estan limitados a onboarding/control de Auth, endpoints publicos controlados de reservas, webhook de pago, rate limits y mantenimiento programado. Los fixtures de integracion lo usan para crear y desmontar datos temporales; nunca se envian al navegador.
 
 ## Pruebas reales
 

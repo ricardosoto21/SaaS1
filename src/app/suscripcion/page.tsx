@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- CSV downloads must use native anchors. */
 import Link from "next/link";
 import { redirect } from "next/navigation";
 

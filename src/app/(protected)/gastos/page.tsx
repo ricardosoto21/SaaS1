@@ -8,11 +8,12 @@ import { PageHeader } from "@/components/page-header";
 import { PageNotice } from "@/components/page-notice";
 import { Pagination } from "@/components/pagination";
 import { StatCard } from "@/components/stat-card";
-import { createExpenseAction } from "@/lib/actions";
+import { createExpenseAction, recordExpensePayablePaymentAction } from "@/lib/actions";
 import { requireSession } from "@/lib/auth";
 import { getCurrentMonthRange, getVisibleExpenses, roleCanAccess } from "@/lib/data";
 import { getParam, isInsideOptionalRange, matchesQuery, paginateItems, uniqueValues } from "@/lib/listing";
 import { readStore } from "@/lib/store";
+import { getSupabaseServerClient } from "@/lib/supabase";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +30,13 @@ export default async function GastosPage({ searchParams }: GastosPageProps) {
 
   const params = (await searchParams) ?? {};
   const store = await readStore(user);
+  const supabase = await getSupabaseServerClient();
+  const [supplierResponse, payableResponse] = await Promise.all([
+    supabase ? supabase.from("suppliers").select("id,name").eq("organization_id", user.organizationId ?? "").eq("active", true).order("name") : { data: [] },
+    supabase ? supabase.from("expenses").select("id,payment_status").eq("organization_id", user.organizationId ?? "").eq("branch_id", user.branchId ?? "") : { data: [] },
+  ]);
+  const suppliers = supplierResponse.data ?? [];
+  const payableStatusByExpense = new Map((payableResponse.data ?? []).map((item) => [String(item.id), String(item.payment_status ?? "paid")]));
   const expenses = getVisibleExpenses(store);
   const currentMonth = getCurrentMonthRange();
   const filters = {
@@ -66,6 +74,9 @@ export default async function GastosPage({ searchParams }: GastosPageProps) {
             <input className="input-base" defaultValue={new Date().toISOString().slice(0, 16)} name="spentAt" required type="datetime-local" />
             <input className="input-base" name="description" placeholder="Descripcion" required />
             <input className="input-base" min={0} name="amount" placeholder="Monto" required type="number" />
+            <select className="select-base" name="supplierId"><option value="">Sin proveedor</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select>
+            <select className="select-base" defaultValue="paid" name="paymentStatus"><option value="paid">Pagado</option><option value="pending">Pendiente</option></select>
+            <select className="select-base" defaultValue="cash" name="paymentMethod"><option value="cash">Efectivo</option><option value="transfer">Transferencia</option><option value="card">Tarjeta</option><option value="other">Otro</option></select>
             <SubmitButton label="Guardar gasto" pendingLabel="Guardando..." />
           </form>
         </article>
@@ -107,6 +118,7 @@ export default async function GastosPage({ searchParams }: GastosPageProps) {
                     <th className="pb-3">Categoria</th>
                     <th className="pb-3">Descripcion</th>
                     <th className="pb-3">Monto</th>
+                    <th className="pb-3">Estado</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-200/60">
@@ -116,6 +128,7 @@ export default async function GastosPage({ searchParams }: GastosPageProps) {
                       <td className="py-4 font-medium">{expense.categoryName}</td>
                       <td className="py-4 text-stone-600">{expense.description}</td>
                       <td className="py-4 font-semibold">{formatCurrency(expense.amount)}</td>
+                      <td className="py-4">{payableStatusByExpense.get(expense.id) === "pending" && user.role === "admin" ? <details><summary className="cursor-pointer font-semibold text-orange-700">Pendiente</summary><form action={recordExpensePayablePaymentAction} className="mt-3 grid gap-2 rounded-xl bg-stone-50 p-3"><input name="expenseId" type="hidden" value={expense.id}/><input name="amount" type="hidden" value={expense.amount}/><select className="select-base" defaultValue="transfer" name="method"><option value="transfer">Transferencia</option><option value="cash">Efectivo</option><option value="card">Tarjeta</option><option value="other">Otro</option></select><input className="input-base" defaultValue={new Date().toISOString().slice(0, 16)} name="paidAt" required type="datetime-local"/><input className="input-base" name="note" placeholder="Nota"/><button className="btn-primary !py-2 text-sm" type="submit">Marcar pagado</button></form></details> : <span className="text-stone-500">{payableStatusByExpense.get(expense.id) === "pending" ? "Pendiente" : "Pagado"}</span>}</td>
                     </tr>
                   ))}
                 </tbody>

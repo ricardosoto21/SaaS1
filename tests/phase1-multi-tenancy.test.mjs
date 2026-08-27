@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const migrationPath = new URL("../supabase/migrations/20260826_phase1_multi_tenancy.sql", import.meta.url);
+const payableLockPath = new URL("../supabase/migrations/20260928_lock_payable_payments_writes.sql", import.meta.url);
 
 test("Fase 1 define organizaciones, sucursales y aislamiento de tenant", async () => {
   const sql = await readFile(migrationPath, "utf8");
@@ -33,4 +34,10 @@ test("Las tablas operacionales quedan indexadas y protegidas por organizacion/su
   assert.match(sql, /public\.has_branch_access\(branch_id\)/);
   assert.match(sql, /alter column organization_id set not null/);
   assert.match(sql, /alter column branch_id set not null/);
+});
+
+test("Los abonos a proveedores no admiten escrituras directas fuera de RPC", async () => {
+  const sql = await readFile(payableLockPath, "utf8");
+  assert.match(sql, /drop policy if exists payable_payments_tenant_write/);
+  assert.match(sql, /revoke insert, update, delete on public\.payable_payments from authenticated/);
 });

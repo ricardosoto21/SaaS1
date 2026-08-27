@@ -11,6 +11,16 @@ export type SubscriptionAccess = {
   features: Record<string, boolean>;
 };
 
+type SubscriptionAccessRow = {
+  status: string;
+  current_period_end: string | null;
+  grace_period_end: string | null;
+  scheduled_for_deletion_at: string | null;
+  allowed: boolean;
+  limits: SubscriptionAccess["limits"] | null;
+  features: SubscriptionAccess["features"] | null;
+};
+
 const platformAccess: SubscriptionAccess = {
   status: "active",
   currentPeriodEnd: null,
@@ -30,13 +40,14 @@ export async function getSubscriptionAccess(user: SessionUser): Promise<Subscrip
   const { data, error } = await supabase.rpc("subscription_access_state", { p_organization_id: user.organizationId }).maybeSingle();
   if (error || !data) return { ...platformAccess, status: "missing", allowed: false };
 
+  const row = data as SubscriptionAccessRow;
   return {
-    status: String(data.status),
-    currentPeriodEnd: data.current_period_end ? String(data.current_period_end) : null,
-    gracePeriodEnd: data.grace_period_end ? String(data.grace_period_end) : null,
-    scheduledForDeletionAt: data.scheduled_for_deletion_at ? String(data.scheduled_for_deletion_at) : null,
-    allowed: data.allowed === true,
-    limits: (data.limits ?? {}) as SubscriptionAccess["limits"],
-    features: (data.features ?? {}) as SubscriptionAccess["features"],
+    status: row.status,
+    currentPeriodEnd: row.current_period_end,
+    gracePeriodEnd: row.grace_period_end,
+    scheduledForDeletionAt: row.scheduled_for_deletion_at,
+    allowed: row.allowed === true,
+    limits: row.limits ?? {},
+    features: row.features ?? {},
   };
 }
