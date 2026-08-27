@@ -3,6 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { enforcePublicRateLimit } from "@/lib/security/public-rate-limit";
 import { getSupabaseAdminClient } from "@/lib/supabase";
 import { slugify } from "@/lib/utils";
 
@@ -12,6 +13,7 @@ export async function registerSalonAction(formData: FormData) {
   const salonName = String(formData.get("salonName") ?? "").trim();
   const branchName = String(formData.get("branchName") ?? "Sucursal principal").trim();
   if (name.length < 2 || !email.includes("@") || salonName.length < 2 || branchName.length < 2) redirect("/registro?error=Datos%20incompletos");
+  if (!(await enforcePublicRateLimit("registration", email, 3, 3600))) redirect("/registro?error=Intenta%20nuevamente%20más%20tarde");
   const supabase = getSupabaseAdminClient();
   if (!supabase) redirect("/registro?error=Servicio%20no%20disponible");
   const requestHeaders = await headers();
