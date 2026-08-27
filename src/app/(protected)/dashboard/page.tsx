@@ -1,4 +1,4 @@
-import { Activity, CalendarCheck2, CreditCard, DollarSign, PackageSearch, Scissors, ShoppingCart, Wallet } from "lucide-react";
+import { Activity, CalendarCheck2, CreditCard, DollarSign, HandCoins, PackageSearch, Scissors, ShoppingCart, TrendingUp, Wallet } from "lucide-react";
 
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
@@ -15,6 +15,7 @@ import {
   normalizeFilters,
 } from "@/lib/data";
 import { readStore } from "@/lib/store";
+import { getSupabaseServerClient } from "@/lib/supabase";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 
 interface DashboardPageProps {
@@ -33,6 +34,15 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const clients = getVisibleClients(store);
   const categories = getCategoriesForFilters(store);
   const currentMonth = getCurrentMonthRange();
+  const supabase = await getSupabaseServerClient();
+  const [payablesResponse, commissionsResponse] = await Promise.all([
+    supabase ? supabase.from("purchases").select("amount_due").eq("branch_id", user.branchId ?? "") : { data: [] },
+    supabase ? supabase.from("commission_entries").select("amount").eq("branch_id", user.branchId ?? "") : { data: [] },
+  ]);
+  const totalPayable = (payablesResponse.data ?? []).reduce((sum, item) => sum + Number(item.amount_due ?? 0), 0);
+  const totalCommissions = (commissionsResponse.data ?? []).reduce((sum, item) => sum + Number(item.amount ?? 0), 0);
+  const productCost = dashboard.sales.flatMap((sale) => sale.items).filter((item) => item.type === "product").reduce((sum, item) => sum + (store.products.find((product) => product.id === item.referenceId)?.cost ?? 0) * item.quantity, 0);
+  const operationalProfit = dashboard.totals.totalSales - productCost - dashboard.totals.totalExpenses - totalCommissions;
 
   return (
     <div className="space-y-4">
@@ -166,6 +176,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         />
       </section>
 
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <StatCard accent="indigo" hint="Compras pendientes." icon={HandCoins} label="Por pagar" value={formatCurrency(totalPayable)} />
+        <StatCard accent="orange" hint="Reglas aplicadas a ventas." icon={Scissors} label="Comisiones" value={formatCurrency(totalCommissions)} />
+        <StatCard accent="teal" hint="Ventas menos costo de productos, gastos y comisiones." icon={TrendingUp} label="Utilidad estimada" value={formatCurrency(operationalProfit)} />
+      </section>
       <section className="grid gap-4 xl:grid-cols-[1.35fr_1fr]">
         <article className="surface rounded-[1.8rem] p-5">
           <div className="flex items-center justify-between">
