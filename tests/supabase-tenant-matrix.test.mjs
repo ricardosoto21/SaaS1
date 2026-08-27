@@ -32,6 +32,11 @@ test("matriz A/B bloquea entidades operacionales e IDOR", { skip: !enabled }, as
   await admin.from("purchases").insert({ id: ids.purchase, organization_id: orgB, branch_id: branchB, purchased_at: new Date().toISOString(), supplier: "B", category_name: "B", total: 1 }).throwOnError();
   await admin.from("expenses").insert({ id: ids.expense, organization_id: orgB, branch_id: branchB, spent_at: new Date().toISOString(), category_id: ids.expenseCategory, description: "B", amount: 1 }).throwOnError();
   await admin.from("inventory_movements").insert({ id: ids.movement, organization_id: orgB, branch_id: branchB, product_id: ids.product, movement_type: "adjustment", quantity: 1, happened_at: new Date().toISOString() }).throwOnError();
+  // Database integrity must also reject cross-tenant references when RLS is bypassed.
+  const mismatchedBranch = await admin.from("products").insert({ id: `mismatch-${suffix}`, organization_id: orgA, branch_id: branchB, name: "Invalid", sku: `invalid-${suffix}`, current_cost: 1, sale_price: 1, current_stock: 0 });
+  assert.ok(mismatchedBranch.error, "la integridad de tenant debe rechazar branch de otra organizacion");
+  const mismatchedProfessional = await admin.from("professional_branches").insert({ organization_id: orgA, professional_id: ids.professional, branch_id: branchA, active: true });
+  assert.ok(mismatchedProfessional.error, "un profesional de B no puede asignarse a una sucursal de A");
   const client = createClient(url, anon, clientOptions); await client.auth.signInWithPassword({ email, password });
   for (const [table, id] of [["organizations", orgB], ["branches", branchB], ["clients", ids.client], ["appointments", ids.appointment], ["sales", ids.sale], ["purchases", ids.purchase], ["products", ids.product], ["inventory_movements", ids.movement], ["expenses", ids.expense]]) {
     const { data, error } = await client.from(table).select("id").eq("id", id); assert.equal(error, null, `${table} no debe filtrar error sensible`); assert.deepEqual(data, [], `${table} B debe quedar oculto`);
