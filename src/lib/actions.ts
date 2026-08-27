@@ -1468,3 +1468,25 @@ export async function createCommissionRuleAction(formData: FormData) {
   await recordAudit(user, "create", "commission_rule", professionalId, { kind, rate });
   done("/configuracion", "Regla de comisión guardada.");
 }
+export async function createBranchAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  if (user.role !== "admin") fail("/configuracion", "Solo un admin puede crear sucursales.");
+  const name = getString(formData, "name");
+  const timezone = getString(formData, "timezone") || "America/Santiago";
+  if (name.length < 2) fail("/configuracion", "Nombre de sucursal invalido.");
+  if (!shouldUseSupabaseStore()) fail("/configuracion", "La gestion de sucursales requiere Supabase.");
+  const { error } = await (await requireSupabaseUser("/configuracion")).rpc("tenant_create_branch", { p_name: name, p_timezone: timezone });
+  if (error) fail("/configuracion", error.message.includes("Branch limit") ? "Tu plan no permite otra sucursal." : "No se pudo crear la sucursal.");
+  await recordAudit(user, "create", "branch", name);
+  done("/configuracion", "Sucursal creada.");
+}
+
+export async function requestSubscriptionCancellationAction(formData: FormData) {
+  const user = await requireSession();
+  if (user.role !== "admin" || !user.organizationId) fail("/suscripcion", "Solo un admin puede cancelar la suscripcion.");
+  if (!shouldUseSupabaseStore()) fail("/suscripcion", "Requiere Supabase.");
+  const { error } = await (await requireSupabaseUser("/suscripcion")).rpc("tenant_cancel_subscription", { p_reason: getString(formData, "reason") });
+  if (error) fail("/suscripcion", "No se pudo solicitar la cancelacion.");
+  await recordAudit(user, "cancellation_requested", "subscription", user.organizationId);
+  done("/suscripcion", "Cancelacion solicitada. Tus datos se conservaran durante 30 dias tras el fin del periodo.");
+}

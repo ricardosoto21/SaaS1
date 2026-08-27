@@ -9,6 +9,7 @@ import {
   connectSumUpAction,
   disconnectSumUpAction,
   createCommissionRuleAction,
+  createBranchAction,
   createProductAction,
   createProfessionalAction,
   assignProfessionalBranchAction,
@@ -52,7 +53,17 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
       <PageHeader description="Ajustes y catalogos." eyebrow="Configuracion" title="Base del negocio" />
       <PageNotice searchParams={params} />
 
-      <section className="surface rounded-[1rem] p-5">
+            <section className="surface rounded-[1rem] p-5">
+        <p className="label">Sucursales</p>
+        <h2 className="mt-1 text-xl font-semibold">Nueva sucursal</h2>
+        <p className="mt-2 text-sm text-stone-600">El limite depende del plan contratado.</p>
+        <form action={createBranchAction} className="mt-4 grid gap-3 md:grid-cols-3">
+          <input className="input-base" name="name" placeholder="Nombre" required />
+          <input className="input-base" defaultValue="America/Santiago" name="timezone" required />
+          <SubmitButton label="Crear sucursal" pendingLabel="Creando..." />
+        </form>
+      </section>
+<section className="surface rounded-[1rem] p-5">
         <p className="label">Pagos online</p>
         <h2 className="mt-1 text-xl font-semibold">SumUp</h2>
         <p className="mt-2 text-sm text-stone-600">La credencial se cifra antes de guardarse y solo se usa en el servidor.</p>

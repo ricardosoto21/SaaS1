@@ -7,6 +7,7 @@ import { redirect } from "next/navigation";
 import { roleCanAccess } from "@/lib/data";
 import { readStore } from "@/lib/store";
 import { getSupabaseServerClient, hasSupabaseEnv } from "@/lib/supabase";
+import { getSubscriptionAccess } from "@/lib/subscriptions/access";
 import type { SessionUser } from "@/lib/types";
 
 const SESSION_COOKIE = "pelu_session";
@@ -141,6 +142,10 @@ export async function requireRoleForPath(path: string) {
   const user = await requireSession();
   if (!roleCanAccess(user.role, path)) {
     redirect("/dashboard");
+  }
+  if (user.role !== "super_admin" && !user.isPlatformAdmin) {
+    const subscription = await getSubscriptionAccess(user);
+    if (!subscription.allowed) redirect("/suscripcion");
   }
   return user;
 }
