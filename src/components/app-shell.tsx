@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import {
+  BarChart3,
   CalendarRange,
   LayoutDashboard,
   Receipt,
@@ -26,6 +27,7 @@ const iconByPath: Record<string, LucideIcon> = {
   "/inventario": ShoppingBag,
   "/compras": Receipt,
   "/gastos": Receipt,
+  "/reportes": BarChart3,
   "/configuracion": Settings,
 } as const;
 

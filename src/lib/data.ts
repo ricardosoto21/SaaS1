@@ -29,6 +29,7 @@ export const navItems = [
   { href: "/inventario", label: "Inventario", roles: ["admin", "recepcion"] as Role[] },
   { href: "/compras", label: "Compras", roles: ["admin", "recepcion"] as Role[] },
   { href: "/gastos", label: "Gastos", roles: ["admin", "recepcion"] as Role[] },
+  { href: "/reportes", label: "Reportes", roles: ["admin", "recepcion"] as Role[] },
   { href: "/configuracion", label: "Configuracion", roles: ["admin"] as Role[] },
 ];
 
