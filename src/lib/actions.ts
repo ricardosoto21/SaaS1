@@ -860,6 +860,25 @@ export async function updateAppointmentStatusAction(formData: FormData) {
   done("/agenda", "Estado actualizado.");
 }
 
+export async function rescheduleAppointmentAction(formData: FormData) {
+  const user = await requireRoleForPath("/agenda");
+  const tenant = tenantScopeFromUser(user);
+  const store = await readStore(user);
+  const appointmentId = getString(formData, "appointmentId");
+  const startAt = parseRequiredDate(getString(formData, "startAt"), "/agenda", "Fecha");
+  const appointment = store.appointments.find((item) => item.id === appointmentId);
+  if (!appointment || !["scheduled", "confirmed"].includes(appointment.status)) fail("/agenda", "La cita no se puede reprogramar.");
+  ensureStylistProfessional(user, appointment.professionalId, "/agenda");
+  if (shouldUseSupabaseStore()) {
+    await runSupabaseRpc("/agenda", "tenant_reschedule_appointment_transaction", { p_appointment_id: appointmentId, p_organization_id: tenant.organizationId, p_start_at: startAt });
+    await recordAudit(user, "reschedule", "appointment", appointmentId, { startAt });
+    done("/agenda", "Cita reprogramada.");
+  }
+  if (appointmentOverlaps(store.appointments, appointment.professionalId, startAt, appointment.totalDurationMinutes, appointmentId)) fail("/agenda", "Ese horario ya esta ocupado.");
+  store.appointments = store.appointments.map((item) => item.id === appointmentId ? { ...item, startAt } : item);
+  await writeStore(store, user);
+  done("/agenda", "Cita reprogramada.");
+}
 export async function convertAppointmentToSaleAction(formData: FormData) {
   const user = await requireRoleForPath("/ventas");
   const tenant = tenantScopeFromUser(user);

@@ -14,6 +14,7 @@ import { StatusBadge } from "@/components/status-badge";
 import {
   convertAppointmentToSaleAction,
   createAppointmentAction,
+  rescheduleAppointmentAction,
   updateAppointmentStatusAction,
 } from "@/lib/actions";
 import { requireSession } from "@/lib/auth";
@@ -237,6 +238,7 @@ export default async function AgendaPage({ searchParams }: AgendaPageProps) {
                               </button>
                             </div>
                           </form>
+                          {['scheduled', 'confirmed'].includes(appointment.status) ? <form action={rescheduleAppointmentAction} className="flex items-center gap-2"><input name="appointmentId" type="hidden" value={appointment.id}/><input className="input-base !w-auto !py-2" defaultValue={appointment.startAt.slice(0,16)} name="startAt" required type="datetime-local"/><button className="btn-secondary !py-2" type="submit">Reprogramar</button></form> : null}
                           {appointment.status === "completed" && !appointment.saleId && roleCanAccess(user.role, "/ventas") ? (
                             <form action={convertAppointmentToSaleAction}>
                               <input name="appointmentId" type="hidden" value={appointment.id} />
