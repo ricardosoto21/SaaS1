@@ -1411,3 +1411,18 @@ export async function disconnectSumUpAction() {
   await recordAudit(user, "disconnect", "payment_provider", "sumup");
   done("/configuracion", "SumUp desconectado.");
 }
+export async function setOrganizationSubscriptionAction(formData: FormData) {
+  const user = await requireSession();
+  if (user.role !== "super_admin") fail("/super-admin", "Acceso denegado.");
+  const organizationId = getString(formData, "organizationId");
+  const planId = getString(formData, "planId");
+  const status = getString(formData, "status");
+  const periodEnd = getString(formData, "periodEnd");
+  const gracePeriodEnd = getString(formData, "gracePeriodEnd");
+  if (!organizationId || !planId || !["trialing", "active", "past_due", "suspended", "cancelled"].includes(status) || !periodEnd) fail("/super-admin", "Suscripcion invalida.");
+  const supabase = await requireSupabaseUser("/super-admin");
+  const { data: subscription, error } = await supabase.from("organization_subscriptions").upsert({ organization_id: organizationId, plan_id: planId, status, current_period_start: new Date().toISOString(), current_period_end: new Date(periodEnd).toISOString(), grace_period_end: gracePeriodEnd ? new Date(gracePeriodEnd).toISOString() : null, updated_at: new Date().toISOString() }, { onConflict: "organization_id" }).select("id").single();
+  if (error || !subscription) fail("/super-admin", "No se pudo actualizar la suscripcion.");
+  await supabase.from("subscription_events").insert({ organization_id: organizationId, subscription_id: subscription.id, action: "subscription_updated", actor_id: user.id, details: { planId, status, periodEnd } });
+  done("/super-admin", "Suscripcion actualizada.");
+}
