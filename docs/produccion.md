@@ -1,8 +1,6 @@
 # Produccion
 
-## Variables
-
-Configurar en Vercel:
+## Variables en Vercel
 
 ```env
 APP_DATA_MODE=supabase
@@ -10,62 +8,42 @@ NEXT_PUBLIC_SITE_URL=https://dominio-final.cl
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
+PAYMENT_CREDENTIALS_ENCRYPTION_KEY=
+CRON_SECRET=
 TZ=America/Santiago
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` debe existir solo en el entorno server-side de Vercel. No debe exponerse en el navegador.
+`SUPABASE_SERVICE_ROLE_KEY`, `PAYMENT_CREDENTIALS_ENCRYPTION_KEY` y `CRON_SECRET` son solo server-side. La clave de cifrado debe ser una cadena Base64 de 32 bytes, distinta por entorno y rotada con un procedimiento planificado.
 
-## Supabase
+## Supabase y Auth
 
-1. Crear proyecto Supabase.
-2. Ejecutar todas las migraciones en orden desde `supabase/migrations`.
-3. Crear el primer usuario admin desde Supabase Auth.
-4. Insertar o actualizar su fila en `public.profiles` con `role = 'admin'` y `active = true`.
-5. Confirmar que RLS esta activo en tablas de negocio.
-6. Confirmar que las RPC transaccionales solo tienen `execute` para `service_role`.
+1. Aplicar las migraciones ordenadas de `supabase/migrations`.
+2. Configurar Site URL y redirects de recuperación: `https://dominio-final.cl/auth/recovery`.
+3. Configurar SMTP/remitente real antes de invitar usuarios.
+4. Verificar RLS y la matriz A/B de aislamiento con las pruebas de integración.
+5. Los flujos normales usan el cliente autenticado y RLS; `service_role` queda para invitaciones, webhooks y jobs controlados.
 
-Ejemplo para primer admin:
+## Backups y recuperación
 
-```sql
-update public.profiles
-set role = 'admin', active = true
-where email = 'correo-admin@dominio.cl';
-```
+- RPO objetivo: 24 horas; tomar backup lógico antes de migraciones de producción.
+- RTO objetivo: 4 horas para recuperación de base y validación funcional básica.
+- Activar backups automáticos según el plan contratado de Supabase y definir responsable operativo.
+- Restaurar siempre primero en un proyecto aislado, ejecutar smoke tests, y recién entonces programar restauración productiva.
+- Conservar evidencia de cada prueba de restauración y su fecha.
 
-## Backups
+## Cron y observabilidad
 
-- Activar backups automaticos del proyecto Supabase.
-- Antes de cambios grandes, tomar backup manual desde Supabase.
-- Mantener documentado quien puede restaurar y en que horario.
-- Probar restauracion en un proyecto Supabase separado antes de tocar produccion.
+- Vercel ejecuta `/api/cron/maintenance` cada 15 minutos; protege la ruta con `CRON_SECRET`.
+- El job vence holds, encola confirmaciones y recordatorios de 24h/2h de forma idempotente.
+- Monitorear `payment_webhook_events`, `message_deliveries`, `audit_logs` y logs de Functions de Vercel.
+- El health check es `GET /api/health`; no expone configuración ni datos de clientes.
+- Enviar logs a un proveedor de error tracking antes de producción; no registrar cuerpos de request, credenciales, cookies ni notas de clientes.
 
-## Auth
+## Checklist de lanzamiento
 
-- Configurar Site URL en Supabase Auth con el dominio final.
-- Agregar Redirect URLs:
-  - `https://dominio-final.cl/auth/recovery`
-  - `https://*.vercel.app/auth/recovery` solo para previews si se van a probar recuperaciones desde preview.
-- Configurar SMTP/remitente real antes de operar con usuarios reales.
-- Confirmar recuperacion de clave e invitacion de usuarios desde el dominio final.
-
-## Monitoreo
-
-- Revisar errores de Functions y build logs en Vercel despues de cada deploy.
-- Revisar `audit_logs` para pagos, ventas, stock, gastos, usuarios y citas.
-- Activar alertas del proyecto Supabase para uso de base de datos y errores.
-
-## Checklist De Lanzamiento
-
-- `npm run typecheck`
-- `npm run lint`
-- `npm run build`
-- Login con Supabase para `admin`, `recepcion` y `estilista`.
-- Crear profesional, usuario, cliente, servicio y producto.
-- Crear cita y verla en agenda diaria, semanal y mensual.
-- Convertir cita a venta y registrar abonos hasta `paid`.
-- Crear venta manual de producto y verificar descuento de stock.
-- Registrar compra y verificar aumento de stock/costo.
-- Registrar gasto y confirmar dashboard.
-- Confirmar que `APP_DATA_MODE=local` no se usa en produccion.
-- Confirmar que ventas, pagos, compras, ajustes de stock, citas y gastos no usan `replace_app_store`.
-- Confirmar backup automatico activo antes de cargar datos reales.
+- `npm run typecheck`, `npm run lint`, `npm test` y `npm run build` verdes.
+- Login, recuperación e invitación validan el dominio final.
+- Validar roles admin, recepción y estilista.
+- Probar reserva, checkout real sandbox/producción controlada, webhook repetido y anticipo parcial.
+- Probar ventas, compras, stock por sucursal, gastos y dashboard.
+- Confirmar backups, procedimiento de restore, `CRON_SECRET` y alertas antes de cargar datos reales.
