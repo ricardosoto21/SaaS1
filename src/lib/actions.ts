@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { getSessionUser, requireRoleForPath } from "@/lib/auth";
+import { getSessionUser, requireRoleForPath, requireSession } from "@/lib/auth";
 import { readStore, writeStore } from "@/lib/store";
 import { encryptSumUpCredentials } from "@/lib/payments/credentials";
 import { getSupabaseAdminClient, getSupabaseServerClient } from "@/lib/supabase";
@@ -1175,6 +1175,8 @@ export async function createPurchaseAction(formData: FormData) {
         notes: getString(formData, "notes"),
         organizationId: tenant.organizationId,
         branchId: tenant.branchId,
+        supplierId: supplierId || null,
+        amountPaid,
         items,
       },
     });
