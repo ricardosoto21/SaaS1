@@ -10,6 +10,7 @@ import { z } from "zod";
 import { getSessionUser, requireRoleForPath, requireSession } from "@/lib/auth";
 import { readStore, writeStore } from "@/lib/store";
 import { encryptSumUpCredentials } from "@/lib/payments/credentials";
+import { getSubscriptionPaymentProvider } from "@/lib/subscriptions/provider";
 import { getSupabaseAdminClient, getSupabaseServerClient } from "@/lib/supabase";
 import { shouldUseSupabaseStore } from "@/lib/supabase-store";
 import { tenantScopeFromUser } from "@/lib/tenant";
@@ -1542,7 +1543,16 @@ export async function requestSubscriptionCancellationAction(formData: FormData) 
   const user = await requireSession();
   if (user.role !== "admin" || !user.organizationId) fail("/suscripcion", "Solo un admin puede cancelar la suscripcion.");
   if (!shouldUseSupabaseStore()) fail("/suscripcion", "Requiere Supabase.");
-  const { error } = await (await requireSupabaseUser("/suscripcion")).rpc("tenant_cancel_subscription", { p_reason: getString(formData, "reason") });
+  const supabase = await requireSupabaseUser("/suscripcion");
+  const { data: subscription } = await supabase.from("organization_subscriptions").select("provider,external_subscription_id").eq("organization_id", user.organizationId).maybeSingle();
+  if (subscription?.provider === "mercadopago" && subscription.external_subscription_id) {
+    try {
+      await getSubscriptionPaymentProvider().cancelSubscription({ subscriptionId: String(subscription.external_subscription_id) });
+    } catch {
+      fail("/suscripcion", "No se pudo cancelar el cobro recurrente. Intenta nuevamente.");
+    }
+  }
+  const { error } = await supabase.rpc("tenant_cancel_subscription", { p_reason: getString(formData, "reason") });
   if (error) fail("/suscripcion", "No se pudo solicitar la cancelacion.");
   await recordAudit(user, "cancellation_requested", "subscription", user.organizationId);
   done("/suscripcion", "Cancelacion solicitada. Tus datos se conservaran durante 30 dias tras el fin del periodo.");
@@ -1589,4 +1599,18 @@ export async function upsertProfessionalServiceOverrideAction(formData: FormData
   if (error) fail("/configuracion", "No se pudo guardar el ajuste del profesional.");
   await recordAudit(user, "update", "professional_service_override", serviceId, { branchId, professionalId, price, durationMinutes, active });
   done("/configuracion", "Ajuste del profesional guardado.");
+}
+
+export async function upsertMessageTemplateAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  const code = getString(formData, "code");
+  const body = getString(formData, "body");
+  const active = getString(formData, "active") !== "false";
+  if (!/^[a-z0-9_]{3,80}$/.test(code) || body.length < 4 || body.length > 1000) fail("/configuracion", "Plantilla invalida.");
+  if (!shouldUseSupabaseStore()) fail("/configuracion", "Requiere Supabase.");
+  const { error } = await (await requireSupabaseUser("/configuracion")).from("message_templates").upsert({ organization_id: tenant.organizationId, code, channel: "whatsapp", body, active }, { onConflict: "organization_id,code" });
+  if (error) fail("/configuracion", "No se pudo guardar la plantilla.");
+  await recordAudit(user, "update", "message_template", code, { active });
+  done("/configuracion", "Plantilla guardada.");
 }

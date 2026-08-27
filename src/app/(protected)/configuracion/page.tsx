@@ -22,6 +22,7 @@ import {
   updateCommissionSettingsAction,
   updateProfileAction,
   updateSettingsAction,
+  upsertMessageTemplateAction,
 } from "@/lib/actions";
 import { getAccessibleBranches, requireSession } from "@/lib/auth";
 import { getSupabaseServerClient } from "@/lib/supabase";
@@ -46,14 +47,20 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
   const params = (await searchParams) ?? {};
   const usesSupabase = shouldUseSupabaseStore();
   const supabase = await getSupabaseServerClient();
-  const commissionResponse = supabase ? await supabase.from("commission_rules").select("id,professional_id,kind,rate,active").eq("organization_id", user.organizationId ?? "").eq("active", true).order("created_at", { ascending: false }) : { data: [] };
+  const [commissionResponse, templateResponse] = await Promise.all([
+    supabase ? supabase.from("commission_rules").select("id,professional_id,kind,rate,active").eq("organization_id", user.organizationId ?? "").eq("active", true).order("created_at", { ascending: false }) : { data: [] },
+    supabase ? supabase.from("message_templates").select("code,body,active").eq("organization_id", user.organizationId ?? "").eq("channel", "whatsapp").order("code") : { data: [] },
+  ]);
   const commissionRules = commissionResponse.data ?? [];
+  const messageTemplates = templateResponse.data ?? [];
 
   return (
     <div className="space-y-4">
       <PageHeader description="Ajustes y catalogos." eyebrow="Configuracion" title="Base del negocio" />
       <PageNotice searchParams={params} />
       <Link className="btn-secondary" href="/configuracion/catalogo">Ajustar catálogo por sucursal</Link>
+
+      <section className="surface rounded-[1rem] p-5"><p className="label">Mensajes</p><h2 className="mt-1 text-xl font-semibold">Plantillas WhatsApp</h2><p className="mt-2 text-sm text-stone-600">Puedes usar {"{{clientName}}"} y {"{{appointmentAt}}"}.</p><div className="mt-4 grid gap-3">{messageTemplates.map((template) => <form action={upsertMessageTemplateAction} className="grid gap-2 md:grid-cols-[180px_1fr_140px_auto]" key={template.code}><input className="input-base" name="code" readOnly value={template.code}/><input className="input-base" defaultValue={template.body} name="body" required/><select className="select-base" defaultValue={template.active ? "true" : "false"} name="active"><option value="true">Activa</option><option value="false">Inactiva</option></select><button className="btn-secondary !py-2" type="submit">Guardar</button></form>)}</div></section>
 
             <section className="surface rounded-[1rem] p-5">
         <p className="label">Sucursales</p>
