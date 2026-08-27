@@ -1488,6 +1488,29 @@ export async function setOrganizationSubscriptionAction(formData: FormData) {
   await supabase.from("subscription_events").insert({ organization_id: organizationId, subscription_id: subscription.id, action: "subscription_updated", actor_id: user.id, details: { planId, status, periodEnd } });
   done("/super-admin", "Suscripcion actualizada.");
 }
+
+export async function updateSubscriptionPlanAction(formData: FormData) {
+  const user = await requireSession();
+  if (user.role !== "super_admin") fail("/super-admin", "Acceso denegado.");
+  const planId = getString(formData, "planId");
+  const monthlyPrice = clampNumber(getNumber(formData, "monthlyPrice"));
+  const active = getString(formData, "active") !== "false";
+  if (!planId || monthlyPrice <= 0) fail("/super-admin", "Plan invalido.");
+  const { error } = await (await requireSupabaseUser("/super-admin")).from("subscription_plans").update({ monthly_price: monthlyPrice, active }).eq("id", planId);
+  if (error) fail("/super-admin", "No se pudo actualizar el plan.");
+  done("/super-admin", "Plan actualizado.");
+}
+
+export async function setOrganizationActiveAction(formData: FormData) {
+  const user = await requireSession();
+  if (user.role !== "super_admin") fail("/super-admin", "Acceso denegado.");
+  const organizationId = getString(formData, "organizationId");
+  const active = getString(formData, "active") === "true";
+  if (!organizationId) fail("/super-admin", "Organizacion invalida.");
+  const { error } = await (await requireSupabaseUser("/super-admin")).from("organizations").update({ active }).eq("id", organizationId);
+  if (error) fail("/super-admin", "No se pudo actualizar la organización.");
+  done("/super-admin", active ? "Organización activada." : "Organización desactivada.");
+}
 export async function createSupplierAction(formData: FormData) {
   const user = await requireRoleForPath("/compras");
   const tenant = tenantScopeFromUser(user);
