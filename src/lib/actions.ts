@@ -8,6 +8,7 @@ import { redirect } from "next/navigation";
 
 import { getSessionUser, requireRoleForPath } from "@/lib/auth";
 import { readStore, writeStore } from "@/lib/store";
+import { encryptSumUpCredentials } from "@/lib/payments/credentials";
 import { getSupabaseAdminClient, getSupabaseServerClient } from "@/lib/supabase";
 import { shouldUseSupabaseStore } from "@/lib/supabase-store";
 import { tenantScopeFromUser } from "@/lib/tenant";
@@ -1374,4 +1375,39 @@ export async function createTimeOffAction(formData: FormData) {
   if (error) fail("/agenda/disponibilidad", "No se pudo guardar el bloqueo.");
   await recordAudit(user, "create_time_off", "professional", professionalId, { startsAt, endsAt });
   done("/agenda/disponibilidad", "Bloqueo guardado.");
+}
+export async function connectSumUpAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  const apiKey = getString(formData, "apiKey");
+  const merchantCode = getString(formData, "merchantCode") || "sumup";
+  if (apiKey.length < 12) fail("/configuracion", "Credencial SumUp invalida.");
+  if (!shouldUseSupabaseStore()) fail("/configuracion", "Requiere Supabase.");
+  try {
+    const credentials = encryptSumUpCredentials({ apiKey });
+    const { error } = await (await requireSupabaseUser("/configuracion")).from("payment_provider_connections").upsert({
+      organization_id: tenant.organizationId,
+      provider: "sumup",
+      merchant_code: merchantCode,
+      encrypted_credentials: credentials.encrypted,
+      credential_iv: credentials.iv,
+      active: true,
+      disconnected_at: null,
+    }, { onConflict: "organization_id" });
+    if (error) fail("/configuracion", "No se pudo guardar la conexion.");
+  } catch {
+    fail("/configuracion", "No se pudo proteger la conexion de pagos.");
+  }
+  await recordAudit(user, "connect", "payment_provider", "sumup");
+  done("/configuracion", "SumUp conectado.");
+}
+
+export async function disconnectSumUpAction() {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  if (!shouldUseSupabaseStore()) fail("/configuracion", "Requiere Supabase.");
+  const { error } = await (await requireSupabaseUser("/configuracion")).from("payment_provider_connections").update({ active: false, disconnected_at: new Date().toISOString() }).eq("organization_id", tenant.organizationId).eq("provider", "sumup");
+  if (error) fail("/configuracion", "No se pudo desconectar SumUp.");
+  await recordAudit(user, "disconnect", "payment_provider", "sumup");
+  done("/configuracion", "SumUp desconectado.");
 }

@@ -6,6 +6,8 @@ import { SubmitButton } from "@/components/forms/submit-button";
 import { PageHeader } from "@/components/page-header";
 import { PageNotice } from "@/components/page-notice";
 import {
+  connectSumUpAction,
+  disconnectSumUpAction,
   createProductAction,
   createProfessionalAction,
   assignProfessionalBranchAction,
@@ -44,6 +46,17 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
       <PageHeader description="Ajustes y catalogos." eyebrow="Configuracion" title="Base del negocio" />
       <PageNotice searchParams={params} />
 
+      <section className="surface rounded-[1rem] p-5">
+        <p className="label">Pagos online</p>
+        <h2 className="mt-1 text-xl font-semibold">SumUp</h2>
+        <p className="mt-2 text-sm text-stone-600">La credencial se cifra antes de guardarse y solo se usa en el servidor.</p>
+        <form action={connectSumUpAction} className="mt-4 grid gap-3 md:grid-cols-3">
+          <input className="input-base" name="merchantCode" placeholder="Codigo de comercio" />
+          <input className="input-base" name="apiKey" placeholder="Clave privada SumUp" required type="password" autoComplete="off" />
+          <SubmitButton label="Conectar SumUp" pendingLabel="Conectando..." />
+        </form>
+        <form action={disconnectSumUpAction} className="mt-3"><button className="btn-secondary" type="submit">Desconectar</button></form>
+      </section>
       <section className="grid gap-4 xl:grid-cols-2">
         <article className="surface rounded-[1rem] p-5">
           <div className="flex items-center gap-3">
@@ -184,6 +197,17 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
         </article>
       </section>
 
+      <section className="surface rounded-[1rem] p-5">
+        <p className="label">Pagos online</p>
+        <h2 className="mt-1 text-xl font-semibold">SumUp</h2>
+        <p className="mt-2 text-sm text-stone-600">La credencial se cifra antes de guardarse y solo se usa en el servidor.</p>
+        <form action={connectSumUpAction} className="mt-4 grid gap-3 md:grid-cols-3">
+          <input className="input-base" name="merchantCode" placeholder="Codigo de comercio" />
+          <input className="input-base" name="apiKey" placeholder="Clave privada SumUp" required type="password" autoComplete="off" />
+          <SubmitButton label="Conectar SumUp" pendingLabel="Conectando..." />
+        </form>
+        <form action={disconnectSumUpAction} className="mt-3"><button className="btn-secondary" type="submit">Desconectar</button></form>
+      </section>
       <section className="grid gap-4 xl:grid-cols-2">
         <article className="surface rounded-[1rem] p-5">
           <div className="flex items-center gap-3">
