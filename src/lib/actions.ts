@@ -1295,6 +1295,9 @@ export async function createExpenseAction(formData: FormData) {
   const store = await readStore(user);
   const categoryName = getString(formData, "categoryName");
   const description = getString(formData, "description");
+  const supplierId = getString(formData, "supplierId");
+  const paymentStatus = getString(formData, "paymentStatus") || "paid";
+  const paymentMethod = getString(formData, "paymentMethod") || "cash";
   const amount = clampNumber(getNumber(formData, "amount"));
 
   if (!categoryName || !description || amount <= 0) {
@@ -1326,6 +1329,9 @@ export async function createExpenseAction(formData: FormData) {
         categoryName: supabaseCategory.name,
         organizationId: tenant.organizationId,
         branchId: tenant.branchId,
+        supplierId: supplierId || null,
+        paymentStatus,
+        paymentMethod,
       },
     });
     await recordAudit(user, "create", "expense", expense.id, { amount });

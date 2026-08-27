@@ -13,6 +13,7 @@ import { requireSession } from "@/lib/auth";
 import { getCurrentMonthRange, getVisibleExpenses, roleCanAccess } from "@/lib/data";
 import { getParam, isInsideOptionalRange, matchesQuery, paginateItems, uniqueValues } from "@/lib/listing";
 import { readStore } from "@/lib/store";
+import { getSupabaseServerClient } from "@/lib/supabase";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,9 @@ export default async function GastosPage({ searchParams }: GastosPageProps) {
   const store = await readStore(user);
   const expenses = getVisibleExpenses(store);
   const currentMonth = getCurrentMonthRange();
+  const supabase = await getSupabaseServerClient();
+  const supplierResponse = supabase ? await supabase.from("suppliers").select("id,name").eq("organization_id", user.organizationId ?? "").eq("active", true).order("name") : { data: [] };
+  const suppliers = supplierResponse.data ?? [];
   const filters = {
     from: getParam(params, "from") || currentMonth.from,
     to: getParam(params, "to") || currentMonth.to,
