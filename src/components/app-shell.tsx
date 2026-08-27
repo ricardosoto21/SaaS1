@@ -30,6 +30,7 @@ const iconByPath: Record<string, LucideIcon> = {
 } as const;
 
 const roleLabel: Record<Role, string> = {
+  super_admin: "Plataforma",
   admin: "Admin",
   recepcion: "Recepcion",
   estilista: "Estilista",

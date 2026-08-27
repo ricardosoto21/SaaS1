@@ -47,6 +47,15 @@ export async function getSessionUser(): Promise<SessionUser | null> {
       return null;
     }
 
+    const { data: platformAdmin } = await supabase
+      .from("platform_admins")
+      .select("user_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (platformAdmin) {
+      return { id: user.id, name: String(user.user_metadata.full_name || user.email || "Plataforma"), email: String(user.email || ""), role: "super_admin" };
+    }
+
     const { data: profile } = await supabase
       .from("profiles")
       .select("id, full_name, email, role, professional_id, organization_id, active_branch_id, active")

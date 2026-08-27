@@ -21,6 +21,7 @@ import type {
 } from "@/lib/types";
 
 export const navItems = [
+  { href: "/super-admin", label: "Plataforma", roles: ["super_admin"] as Role[] },
   { href: "/dashboard", label: "Dashboard", roles: ["admin", "recepcion", "estilista"] as Role[] },
   { href: "/agenda", label: "Agenda", roles: ["admin", "recepcion", "estilista"] as Role[] },
   { href: "/clientes", label: "Clientes", roles: ["admin", "recepcion", "estilista"] as Role[] },
@@ -62,6 +63,7 @@ export function normalizeFilters(
 }
 
 export function roleCanAccess(role: Role, path: string) {
+  if (role === "super_admin") return path === "/super-admin";
   return navItems.some((item) => item.href === path && item.roles.includes(role));
 }
 

@@ -1325,3 +1325,23 @@ export async function createExpenseAction(formData: FormData) {
   await recordAudit(user, "create", "expense", expense.id, { amount });
   done("/gastos", "Gasto guardado.");
 }
+
+export async function startImpersonationAction(formData: FormData) {
+  const user = await requireRoleForPath("/super-admin");
+  const organizationId = getString(formData, "organizationId");
+  const reason = getString(formData, "reason");
+  if (user.role !== "super_admin" || !organizationId) fail("/super-admin", "Access denied.");
+  const supabase = await requireSupabaseUser("/super-admin");
+  const { error } = await supabase.rpc("start_impersonation", { p_organization_id: organizationId, p_reason: reason });
+  if (error) fail("/super-admin", "No se pudo iniciar soporte.");
+  done("/dashboard", "Soporte iniciado.");
+}
+
+export async function endImpersonationAction() {
+  const user = await requireRoleForPath("/super-admin");
+  if (user.role !== "super_admin") fail("/super-admin", "Access denied.");
+  const supabase = await requireSupabaseUser("/super-admin");
+  const { error } = await supabase.rpc("end_impersonation");
+  if (error) fail("/super-admin", "No se pudo finalizar soporte.");
+  done("/super-admin", "Soporte finalizado.");
+}

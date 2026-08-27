@@ -1,4 +1,4 @@
-export type Role = "admin" | "recepcion" | "estilista";
+export type Role = "admin" | "recepcion" | "estilista" | "super_admin";
 
 export type AppointmentStatus =
   | "scheduled"
