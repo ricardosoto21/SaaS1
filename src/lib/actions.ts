@@ -288,28 +288,14 @@ export async function createProfessionalAction(formData: FormData) {
   };
 
   if (shouldUseSupabaseStore()) {
-    const { error } = await (await requireSupabaseUser("/configuracion")).from("professionals").insert({
-      organization_id: tenant.organizationId,
-      id: professional.id,
-      full_name: professional.name,
-      specialty: professional.specialty,
-      color: professional.color,
-      active: professional.active,
+    await runSupabaseRpc("/configuracion", "tenant_create_professional", {
+      p_id: professional.id,
+      p_full_name: professional.name,
+      p_specialty: professional.specialty,
+      p_color: professional.color,
+      p_organization_id: tenant.organizationId,
+      p_branch_id: tenant.branchId,
     });
-    if (error) {
-      fail("/configuracion", error.message);
-    }
-    const { error: branchError } = await (await requireSupabaseUser("/configuracion"))
-      .from("professional_branches")
-      .insert({
-        organization_id: tenant.organizationId,
-        professional_id: professional.id,
-        branch_id: tenant.branchId,
-        active: true,
-      });
-    if (branchError) {
-      fail("/configuracion", branchError.message);
-    }
     await recordAudit(user, "create", "professional", professional.id);
     done("/configuracion", "Profesional creado.");
   }
@@ -581,41 +567,19 @@ export async function createUserAction(formData: FormData) {
       fail("/configuracion", error?.message ?? "No se pudo invitar el usuario.");
     }
 
-    const supabase = await requireSupabaseUser("/configuracion");
-
-    const { error: profileError } = await supabase.from("profiles").upsert({
-      id: data.user.id,
-      full_name: name,
-      email,
-      role,
-      professional_id: professionalId ?? null,
-      organization_id: tenant.organizationId,
-      active_branch_id: tenant.branchId,
-      active: true,
+    const { error: provisionError } = await (await requireSupabaseUser("/configuracion")).rpc("tenant_provision_invited_member", {
+      p_user_id: data.user.id,
+      p_full_name: name,
+      p_email: email,
+      p_role: role,
+      p_professional_id: professionalId ?? null,
+      p_organization_id: tenant.organizationId,
+      p_branch_id: tenant.branchId,
     });
-
-    if (profileError) {
-      fail("/configuracion", profileError.message);
-    }
-
-    const { error: membershipError } = await supabase.from("organization_members").upsert({
-      organization_id: tenant.organizationId,
-      user_id: data.user.id,
-      role,
-      active: true,
-    });
-    if (membershipError) {
-      fail("/configuracion", membershipError.message);
-    }
-
-    const { error: branchAccessError } = await supabase.from("user_branch_access").upsert({
-      organization_id: tenant.organizationId,
-      branch_id: tenant.branchId,
-      user_id: data.user.id,
-      active: true,
-    });
-    if (branchAccessError) {
-      fail("/configuracion", branchAccessError.message);
+    if (provisionError) {
+      // Avoid leaving an Auth identity without tenant access when provisioning fails.
+      await authAdmin.auth.admin.deleteUser(data.user.id);
+      fail("/configuracion", provisionError.message);
     }
 
     await recordAudit(user, "invite", "profile", data.user.id, { role });
