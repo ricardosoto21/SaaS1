@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { setActiveBranchAction } from "@/lib/actions";
+import { endImpersonationAction, setActiveBranchAction } from "@/lib/actions";
 import { signOutAction } from "@/lib/auth";
 import { navItems } from "@/lib/data";
 import type { Role, SessionUser } from "@/lib/types";
@@ -65,6 +65,8 @@ export function AppShell({ children, user, branches }: { children: React.ReactNo
             </select>
             {branches.length > 1 ? <button className="btn-secondary mt-2 w-full" type="submit">Cambiar sucursal</button> : null}
           </form>
+
+          {user.isPlatformAdmin ? <form action={endImpersonationAction} className="mt-3"><button className="btn-secondary w-full" type="submit">Finalizar soporte</button></form> : null}
 
           <nav className="mt-8 space-y-2">
             {items.map((item) => {

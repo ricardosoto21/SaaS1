@@ -223,4 +223,6 @@ export interface SessionUser {
   professionalId?: string;
   organizationId?: string;
   branchId?: string;
+  impersonatingOrganizationId?: string;
+  isPlatformAdmin?: boolean;
 }

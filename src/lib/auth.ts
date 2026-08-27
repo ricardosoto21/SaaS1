@@ -53,6 +53,12 @@ export async function getSessionUser(): Promise<SessionUser | null> {
       .eq("user_id", user.id)
       .maybeSingle();
     if (platformAdmin) {
+      const { data: supportSession } = await supabase.from("impersonation_sessions").select("organization_id").is("ended_at", null).eq("platform_admin_id", user.id).maybeSingle();
+      if (supportSession) {
+        const { data: branch } = await supabase.from("branches").select("id").eq("organization_id", supportSession.organization_id).order("created_at").limit(1).maybeSingle();
+        if (!branch) return null;
+        return { id: user.id, name: String(user.user_metadata.full_name || user.email || "Plataforma"), email: String(user.email || ""), role: "admin", organizationId: String(supportSession.organization_id), branchId: String(branch.id), impersonatingOrganizationId: String(supportSession.organization_id), isPlatformAdmin: true };
+      }
       return { id: user.id, name: String(user.user_metadata.full_name || user.email || "Plataforma"), email: String(user.email || ""), role: "super_admin" };
     }
 

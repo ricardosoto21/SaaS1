@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { requireRoleForPath } from "@/lib/auth";
+import { getSessionUser, requireRoleForPath } from "@/lib/auth";
 import { readStore, writeStore } from "@/lib/store";
 import { getSupabaseAdminClient, getSupabaseServerClient } from "@/lib/supabase";
 import { shouldUseSupabaseStore } from "@/lib/supabase-store";
@@ -1338,8 +1338,8 @@ export async function startImpersonationAction(formData: FormData) {
 }
 
 export async function endImpersonationAction() {
-  const user = await requireRoleForPath("/super-admin");
-  if (user.role !== "super_admin") fail("/super-admin", "Access denied.");
+  const user = await getSessionUser();
+  if (!user?.isPlatformAdmin) fail("/super-admin", "Access denied.");
   const supabase = await requireSupabaseUser("/super-admin");
   const { error } = await supabase.rpc("end_impersonation");
   if (error) fail("/super-admin", "No se pudo finalizar soporte.");
