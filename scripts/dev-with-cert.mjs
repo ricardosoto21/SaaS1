@@ -1,16 +1,16 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 const certPath = resolve(".certs", "avast-webmail-shield-root.pem");
-const nextBin = join("node_modules", ".bin", process.platform === "win32" ? "next.cmd" : "next");
+const nextBin = resolve("node_modules", "next", "dist", "bin", "next");
 const childEnv = { ...process.env };
 
 if (existsSync(certPath) && !childEnv.NODE_EXTRA_CA_CERTS) {
   childEnv.NODE_EXTRA_CA_CERTS = certPath;
 }
 
-const child = spawn(nextBin, ["dev", ...process.argv.slice(2)], {
+const child = spawn(process.execPath, [nextBin, "dev", ...process.argv.slice(2)], {
   env: childEnv,
   shell: false,
   stdio: "inherit",

@@ -1,6 +1,8 @@
 import { Scissors } from "lucide-react";
+import { redirect } from "next/navigation";
 
-import { requestPasswordResetAction, signInAction } from "@/lib/auth";
+import { SupabaseLoginForm } from "@/components/supabase-login-form";
+import { getSessionUser, requestPasswordResetAction, signInAction } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +11,17 @@ interface LoginPageProps {
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
+  const sessionUser = await getSessionUser();
+  if (sessionUser) {
+    redirect("/dashboard");
+  }
+
   const params = (await searchParams) ?? {};
+  const usesSupabaseAuth = Boolean(
+    process.env.APP_DATA_MODE !== "local" &&
+      process.env.NEXT_PUBLIC_SUPABASE_URL &&
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  );
   const hasError = params.error === "1" || params.error === "credentials";
   const isInactive = params.error === "inactive";
   const hasSessionError = params.error === "session";
@@ -41,25 +53,29 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           </div>
         ) : null}
 
-        <form action={signInAction} className="mt-6 space-y-4">
-          <div className="space-y-2">
-            <label className="label" htmlFor="email">
-              Email
-            </label>
-            <input className="input-base" id="email" name="email" placeholder="tu@email.cl" required />
-          </div>
+        {usesSupabaseAuth ? (
+          <SupabaseLoginForm />
+        ) : (
+          <form action={signInAction} className="mt-6 space-y-4">
+            <div className="space-y-2">
+              <label className="label" htmlFor="email">
+                Email
+              </label>
+              <input className="input-base" id="email" name="email" placeholder="tu@email.cl" required />
+            </div>
 
-          <div className="space-y-2">
-            <label className="label" htmlFor="password">
-              Clave
-            </label>
-            <input className="input-base" id="password" name="password" placeholder="Clave" required type="password" />
-          </div>
+            <div className="space-y-2">
+              <label className="label" htmlFor="password">
+                Clave
+              </label>
+              <input className="input-base" id="password" name="password" placeholder="Clave" required type="password" />
+            </div>
 
-          <button className="btn-primary w-full" type="submit">
-            Entrar
-          </button>
-        </form>
+            <button className="btn-primary w-full" type="submit">
+              Entrar
+            </button>
+          </form>
+        )}
 
         <form action={requestPasswordResetAction} className="mt-4 space-y-3 border-t border-stone-200 pt-4">
           <p className="text-sm font-semibold text-stone-700">Recuperar acceso</p>

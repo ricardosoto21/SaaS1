@@ -8,14 +8,16 @@ import { PageNotice } from "@/components/page-notice";
 import {
   createProductAction,
   createProfessionalAction,
+  assignProfessionalBranchAction,
   createServiceAction,
   createUserAction,
+  removeProfessionalBranchAction,
   resetUserAccessAction,
   updateProfessionalStatusAction,
   updateProfileAction,
   updateSettingsAction,
 } from "@/lib/actions";
-import { requireSession } from "@/lib/auth";
+import { getAccessibleBranches, requireSession } from "@/lib/auth";
 import { roleCanAccess } from "@/lib/data";
 import { readStore } from "@/lib/store";
 import { shouldUseSupabaseStore } from "@/lib/supabase-store";
@@ -33,6 +35,7 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
   }
 
   const store = await readStore(user);
+  const branches = await getAccessibleBranches();
   const params = (await searchParams) ?? {};
   const usesSupabase = shouldUseSupabaseStore();
 
@@ -90,6 +93,7 @@ export default async function ConfiguracionPage({ searchParams }: ConfiguracionP
                   <button className="btn-secondary !py-2" type="submit">
                     {professional.active ? "Desactivar" : "Activar"}
                   </button>
+                  {branches.length > 1 ? <><select className="select-base !py-2" name="branchId">{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select><button className="btn-secondary !py-2" formAction={assignProfessionalBranchAction} type="submit">Asignar</button><button className="btn-secondary !py-2" formAction={removeProfessionalBranchAction} type="submit">Quitar</button></> : null}
                 </form>
               ))
             ) : null}

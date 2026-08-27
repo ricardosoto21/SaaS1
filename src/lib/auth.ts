@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 
 import { roleCanAccess } from "@/lib/data";
 import { readStore } from "@/lib/store";
-import { getSupabaseAdminClient, getSupabaseServerClient, hasSupabaseEnv } from "@/lib/supabase";
+import { getSupabaseServerClient, hasSupabaseEnv } from "@/lib/supabase";
 import type { SessionUser } from "@/lib/types";
 
 const SESSION_COOKIE = "pelu_session";
@@ -41,8 +41,9 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 
     const {
       data: { user },
+      error: userError,
     } = await supabase.auth.getUser();
-    if (!user) {
+    if (!user || userError) {
       return null;
     }
 
@@ -129,39 +130,36 @@ export async function requireRoleForPath(path: string) {
   return user;
 }
 
+export async function getAccessibleBranches() {
+  const user = await getSessionUser();
+  const supabase = await getSupabaseServerClient();
+  if (!user?.organizationId || !supabase) return [];
+  const { data } = await supabase.from("branches").select("id, name").eq("organization_id", user.organizationId).order("name");
+  return (data ?? []).map((branch) => ({ id: String(branch.id), name: String(branch.name) }));
+}
+
+// Groups only branches visible through the authenticated user's RLS scope.
+export async function getProfessionalBranchAssignments() {
+  const user = await getSessionUser();
+  const supabase = await getSupabaseServerClient();
+  if (!user?.organizationId || !supabase) return new Map<string, Array<{ id: string; name: string }>>();
+  const { data } = await supabase.from("professional_branches").select("professional_id, branch_id, branches(name)").eq("organization_id", user.organizationId).eq("active", true);
+  const assignments = new Map<string, Array<{ id: string; name: string }>>();
+  for (const row of data ?? []) {
+    const branch = Array.isArray(row.branches) ? row.branches[0] : row.branches;
+    if (!branch) continue;
+    const items = assignments.get(String(row.professional_id)) ?? [];
+    items.push({ id: String(row.branch_id), name: String(branch.name) });
+    assignments.set(String(row.professional_id), items);
+  }
+  return assignments;
+}
+
 export async function signInAction(formData: FormData) {
   "use server";
 
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
-
-  if (shouldUseSupabaseAuth()) {
-    const supabase = await getSupabaseServerClient();
-    if (!supabase) {
-      redirect("/login?error=1");
-    }
-
-    await supabase.auth.signOut({ scope: "local" });
-
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error || !data.user) {
-      redirect("/login?error=credentials");
-    }
-
-    const profileClient = getSupabaseAdminClient() ?? supabase;
-    const { data: profile } = await profileClient
-      .from("profiles")
-      .select("id, active")
-      .eq("id", data.user.id)
-      .maybeSingle();
-
-    if (!profile || profile.active === false) {
-      await supabase.auth.signOut();
-      redirect("/login?error=inactive");
-    }
-
-    redirect("/dashboard");
-  }
 
   const store = await readStore();
   const profile = store.profiles.find(

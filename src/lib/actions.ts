@@ -85,8 +85,8 @@ async function getAppOrigin() {
   return host ? `${protocol}://${host}` : "http://localhost:3001";
 }
 
-function requireSupabaseAdmin(path: string) {
-  const supabase = getSupabaseAdminClient();
+async function requireSupabaseUser(path: string) {
+  const supabase = await getSupabaseServerClient();
   if (!supabase) {
     fail(path, "Supabase no esta configurado.");
   }
@@ -94,14 +94,14 @@ function requireSupabaseAdmin(path: string) {
 }
 
 async function runSupabaseRpc(path: string, name: string, args: Record<string, unknown>) {
-  const { error } = await requireSupabaseAdmin(path).rpc(name, args);
+  const { error } = await (await requireSupabaseUser(path)).rpc(name, args);
   if (error) {
     fail(path, error.message);
   }
 }
 
 async function upsertSupabaseCategory(path: string, table: string, id: string, name: string, organizationId: string) {
-  const supabase = requireSupabaseAdmin(path);
+  const supabase = await requireSupabaseUser(path);
   const { data: existing, error: selectError } = await supabase
     .from(table)
     .select("id, name")
@@ -214,17 +214,11 @@ async function recordAudit(
     return;
   }
 
-  const supabase = getSupabaseAdminClient();
-  await supabase?.from("audit_logs").insert({
-    organization_id: user.organizationId,
-    branch_id: user.branchId,
-    actor_id: user.id,
-    actor_email: user.email,
-    action,
-    entity_type: entityType,
-    entity_id: entityId ?? null,
-    details,
-  });
+  const supabase = await getSupabaseServerClient();
+  if (!supabase || !user.organizationId || !user.branchId) return;
+  const { error } = await supabase.rpc("record_tenant_audit", { p_action: action, p_entity_type: entityType, p_entity_id: entityId ?? null, p_details: details, p_organization_id: user.organizationId, p_branch_id: user.branchId });
+  // Do not report a committed business operation as failed because its audit insert failed.
+  if (error) console.error("No se pudo registrar auditoria:", error.message);
 }
 
 export async function createClientAction(formData: FormData) {
@@ -250,7 +244,7 @@ export async function createClientAction(formData: FormData) {
   };
 
   if (shouldUseSupabaseStore()) {
-    const { error } = await requireSupabaseAdmin("/clientes").from("clients").insert({
+    const { error } = await (await requireSupabaseUser("/clientes")).from("clients").insert({
       organization_id: tenant.organizationId,
       id: client.id,
       full_name: client.name,
@@ -293,7 +287,7 @@ export async function createProfessionalAction(formData: FormData) {
   };
 
   if (shouldUseSupabaseStore()) {
-    const { error } = await requireSupabaseAdmin("/configuracion").from("professionals").insert({
+    const { error } = await (await requireSupabaseUser("/configuracion")).from("professionals").insert({
       organization_id: tenant.organizationId,
       id: professional.id,
       full_name: professional.name,
@@ -304,7 +298,7 @@ export async function createProfessionalAction(formData: FormData) {
     if (error) {
       fail("/configuracion", error.message);
     }
-    const { error: branchError } = await requireSupabaseAdmin("/configuracion")
+    const { error: branchError } = await (await requireSupabaseUser("/configuracion"))
       .from("professional_branches")
       .insert({
         organization_id: tenant.organizationId,
@@ -337,7 +331,7 @@ export async function updateProfessionalStatusAction(formData: FormData) {
   }
 
   if (shouldUseSupabaseStore()) {
-    const { error } = await requireSupabaseAdmin("/configuracion")
+    const { error } = await (await requireSupabaseUser("/configuracion"))
       .from("professionals")
       .update({ active })
       .eq("organization_id", tenant.organizationId)
@@ -355,6 +349,41 @@ export async function updateProfessionalStatusAction(formData: FormData) {
   await writeStore(store, user);
   await recordAudit(user, active ? "activate" : "deactivate", "professional", professionalId);
   done("/configuracion", active ? "Profesional activado." : "Profesional desactivado.");
+}
+
+export async function assignProfessionalBranchAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  const professionalId = getString(formData, "professionalId");
+  const branchId = getString(formData, "branchId");
+  if (!professionalId || !branchId) fail("/configuracion", "Profesional o sucursal invalida.");
+  if (shouldUseSupabaseStore()) {
+    const supabase = await requireSupabaseUser("/configuracion");
+    const { data: access } = await supabase.from("user_branch_access").select("branch_id").eq("branch_id", branchId).maybeSingle();
+    if (!access) fail("/configuracion", "No tienes acceso a esa sucursal.");
+    const { error } = await supabase.from("professional_branches").upsert({ organization_id: tenant.organizationId, professional_id: professionalId, branch_id: branchId, active: true });
+    if (error) fail("/configuracion", "No se pudo asignar la sucursal.");
+    await recordAudit(user, "assign_branch", "professional", professionalId, { branchId });
+    done("/configuracion", "Sucursal asignada.");
+  }
+  done("/configuracion", "Disponible con Supabase.");
+}
+
+export async function removeProfessionalBranchAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  const professionalId = getString(formData, "professionalId");
+  const branchId = getString(formData, "branchId");
+  if (!professionalId || !branchId) fail("/configuracion", "Profesional o sucursal invalida.");
+  if (!shouldUseSupabaseStore()) done("/configuracion", "Disponible con Supabase.");
+  const supabase = await requireSupabaseUser("/configuracion");
+  const { count, error: countError } = await supabase.from("professional_branches").select("professional_id", { count: "exact", head: true }).eq("organization_id", tenant.organizationId).eq("professional_id", professionalId).eq("active", true);
+  if (countError || !count) fail("/configuracion", "No se encontro la asignacion.");
+  if (count < 2) fail("/configuracion", "El profesional debe conservar una sucursal.");
+  const { error } = await supabase.from("professional_branches").delete().eq("organization_id", tenant.organizationId).eq("professional_id", professionalId).eq("branch_id", branchId);
+  if (error) fail("/configuracion", "No se pudo quitar la sucursal.");
+  await recordAudit(user, "remove_branch", "professional", professionalId, { branchId });
+  done("/configuracion", "Sucursal quitada.");
 }
 
 export async function createServiceAction(formData: FormData) {
@@ -387,7 +416,7 @@ export async function createServiceAction(formData: FormData) {
       category.name,
       tenant.organizationId,
     );
-    const { error } = await requireSupabaseAdmin("/configuracion").from("services").insert({
+    const { error } = await (await requireSupabaseUser("/configuracion")).from("services").insert({
       organization_id: tenant.organizationId,
       id: service.id,
       name: service.name,
@@ -446,7 +475,7 @@ export async function createProductAction(formData: FormData) {
       category.name,
       tenant.organizationId,
     );
-    const { error } = await requireSupabaseAdmin("/configuracion").from("products").insert({
+    const { error } = await (await requireSupabaseUser("/configuracion")).from("products").insert({
       organization_id: tenant.organizationId,
       branch_id: tenant.branchId,
       id: product.id,
@@ -484,7 +513,7 @@ export async function updateSettingsAction(formData: FormData) {
   };
 
   if (shouldUseSupabaseStore()) {
-    const { error } = await requireSupabaseAdmin("/configuracion").from("settings").upsert({
+    const { error } = await (await requireSupabaseUser("/configuracion")).from("settings").upsert({
       id: `settings-${tenant.organizationId}`,
       organization_id: tenant.organizationId,
       salon_name: store.settings.salonName,
@@ -533,13 +562,14 @@ export async function createUserAction(formData: FormData) {
   }
 
   if (shouldUseSupabaseStore()) {
-    const supabase = getSupabaseAdminClient();
-    if (!supabase) {
+    // Supabase Auth admin APIs require the server-only service role to invite users.
+    const authAdmin = getSupabaseAdminClient();
+    if (!authAdmin) {
       fail("/configuracion", "Supabase no esta configurado.");
     }
 
     const origin = await getAppOrigin();
-    const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
+    const { data, error } = await authAdmin.auth.admin.inviteUserByEmail(email, {
       data: { full_name: name, role },
       redirectTo: `${origin}/auth/recovery`,
     });
@@ -547,6 +577,8 @@ export async function createUserAction(formData: FormData) {
     if (error || !data.user) {
       fail("/configuracion", error?.message ?? "No se pudo invitar el usuario.");
     }
+
+    const supabase = await requireSupabaseUser("/configuracion");
 
     const { error: profileError } = await supabase.from("profiles").upsert({
       id: data.user.id,
@@ -628,7 +660,7 @@ export async function updateProfileAction(formData: FormData) {
   }
 
   if (shouldUseSupabaseStore()) {
-    const supabase = getSupabaseAdminClient();
+    const supabase = await requireSupabaseUser("/configuracion");
     const { error } = await supabase!
       .from("profiles")
       .update({ role, professional_id: professionalId ?? null, active })
@@ -680,6 +712,19 @@ export async function resetUserAccessAction(formData: FormData) {
   }
 
   done("/configuracion", "Correo de recuperacion enviado.");
+}
+
+export async function setActiveBranchAction(formData: FormData) {
+  const user = await requireRoleForPath("/dashboard");
+  void user;
+  const branchId = getString(formData, "branchId");
+  if (!branchId) fail("/dashboard", "Sucursal invalida.");
+  if (shouldUseSupabaseStore()) {
+    const { error } = await (await requireSupabaseUser("/dashboard")).rpc("set_active_branch", { p_branch_id: branchId });
+    if (error) fail("/dashboard", "No tienes acceso a esa sucursal.");
+    done("/dashboard", "Sucursal actualizada.");
+  }
+  done("/dashboard", "Sucursal actualizada.");
 }
 
 export async function createAppointmentAction(formData: FormData) {

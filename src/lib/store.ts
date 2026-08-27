@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { initialStore } from "@/lib/seed";
-import { readSupabaseStore, shouldUseSupabaseStore, writeSupabaseStore } from "@/lib/supabase-store";
+import { readSupabaseStore, shouldUseSupabaseStore } from "@/lib/supabase-store";
 import { tenantScopeFromUser } from "@/lib/tenant";
 import type { AppStore, SessionUser } from "@/lib/types";
 
@@ -34,13 +34,10 @@ export async function readStore(user?: SessionUser): Promise<AppStore> {
   return JSON.parse(raw) as AppStore;
 }
 
-export async function writeStore(store: AppStore, user?: SessionUser) {
+export async function writeStore(store: AppStore, _user?: SessionUser) {
+  void _user;
   if (shouldUseSupabaseStore()) {
-    if (!user) {
-      throw new Error("Se requiere el contexto del usuario para guardar datos de la organizacion.");
-    }
-    await writeSupabaseStore(store, tenantScopeFromUser(user));
-    return;
+    throw new Error("Las escrituras Supabase deben usar operaciones especificas por entidad.");
   }
 
   await ensureStoreFile();

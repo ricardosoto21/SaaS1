@@ -1,5 +1,5 @@
 import { initialStore } from "@/lib/seed";
-import { getSupabaseAdminClient, hasSupabaseEnv } from "@/lib/supabase";
+import { getSupabaseServerClient, hasSupabaseEnv } from "@/lib/supabase";
 import type { TenantScope } from "@/lib/tenant";
 import type {
   AppStore,
@@ -27,8 +27,8 @@ export function shouldUseSupabaseStore() {
   return hasSupabaseEnv() && process.env.APP_DATA_MODE !== "local";
 }
 
-function requiredClient() {
-  const client = getSupabaseAdminClient();
+async function requiredClient() {
+  const client = await getSupabaseServerClient();
   if (!client) {
     throw new Error("Supabase no esta configurado.");
   }
@@ -66,7 +66,8 @@ const BRANCH_SCOPED_TABLES = new Set([
 ]);
 
 async function selectAll(table: string, scope: TenantScope) {
-  let query = requiredClient().from(table).select("*").eq("organization_id", scope.organizationId);
+  const client = await requiredClient();
+  let query = client.from(table).select("*").eq("organization_id", scope.organizationId);
   if (BRANCH_SCOPED_TABLES.has(table)) {
     query = query.eq("branch_id", scope.branchId);
   }
@@ -343,13 +344,4 @@ export async function readSupabaseStore(scope: TenantScope): Promise<AppStore> {
     expenses,
     inventoryMovements,
   };
-}
-
-export async function writeSupabaseStore(store: AppStore, scope: TenantScope) {
-  const { error } = await requiredClient().rpc("replace_app_store", {
-    payload: { ...store, organizationId: scope.organizationId, branchId: scope.branchId },
-  });
-  if (error) {
-    throw new Error(`No se pudo guardar en Supabase: ${error.message}`);
-  }
 }

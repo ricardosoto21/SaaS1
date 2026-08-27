@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { setActiveBranchAction } from "@/lib/actions";
 import { signOutAction } from "@/lib/auth";
 import { navItems } from "@/lib/data";
 import type { Role, SessionUser } from "@/lib/types";
@@ -34,7 +35,7 @@ const roleLabel: Record<Role, string> = {
   estilista: "Estilista",
 };
 
-export function AppShell({ children, user }: { children: React.ReactNode; user: SessionUser }) {
+export function AppShell({ children, user, branches }: { children: React.ReactNode; user: SessionUser; branches: Array<{ id: string; name: string }> }) {
   const items = navItems.filter((item) => item.roles.includes(user.role));
 
   return (
@@ -56,6 +57,13 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             <p className="mt-2 text-lg font-semibold">{user.name}</p>
             <p className="text-sm text-stone-600">{roleLabel[user.role]}</p>
           </div>
+          <form action={setActiveBranchAction} className="mt-3">
+            <label className="label" htmlFor="branchId">Sucursal</label>
+            <select className="input-base mt-1 w-full" defaultValue={user.branchId} id="branchId" name="branchId">
+              {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+            </select>
+            {branches.length > 1 ? <button className="btn-secondary mt-2 w-full" type="submit">Cambiar sucursal</button> : null}
+          </form>
 
           <nav className="mt-8 space-y-2">
             {items.map((item) => {
