@@ -17,6 +17,7 @@ import { endImpersonationAction, setActiveBranchAction } from "@/lib/actions";
 import { signOutAction } from "@/lib/auth";
 import { navItems } from "@/lib/data";
 import type { Role, SessionUser } from "@/lib/types";
+import { appBrand } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 
 const iconByPath: Record<string, LucideIcon> = {
@@ -50,7 +51,7 @@ export function AppShell({ children, user, branches }: { children: React.ReactNo
               <Scissors className="h-6 w-6" />
             </div>
             <div>
-              <p className="label">Peluqueria</p>
+              <p className="label">{appBrand.appName}</p>
               <h1 className="text-xl font-semibold">Gestion</h1>
             </div>
           </div>
