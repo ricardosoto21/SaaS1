@@ -101,7 +101,7 @@ export default async function AgendaPage({ searchParams }: AgendaPageProps) {
 
   return (
     <div className="space-y-4">
-      <PageHeader description="Citas por hora." eyebrow="Agenda" title="Agenda" />
+      <div className="flex items-start justify-between gap-3"><PageHeader description="Citas por hora." eyebrow="Agenda" title="Agenda" />{roleCanAccess(user.role, "/configuracion") ? <Link className="btn-secondary" href="/agenda/disponibilidad">Disponibilidad</Link> : null}</div>
       <PageNotice searchParams={params} />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

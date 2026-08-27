@@ -1345,3 +1345,33 @@ export async function endImpersonationAction() {
   if (error) fail("/super-admin", "No se pudo finalizar soporte.");
   done("/super-admin", "Soporte finalizado.");
 }
+export async function createWorkingHoursAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  const professionalId = getString(formData, "professionalId");
+  const weekday = getNumber(formData, "weekday");
+  const startsAt = getString(formData, "startsAt");
+  const endsAt = getString(formData, "endsAt");
+  if (!professionalId || !Number.isInteger(weekday) || weekday < 0 || weekday > 6 || !startsAt || !endsAt || endsAt <= startsAt) fail("/agenda/disponibilidad", "Horario invalido.");
+  if (!shouldUseSupabaseStore()) done("/agenda/disponibilidad", "Disponible con Supabase.");
+  const supabase = await requireSupabaseUser("/agenda/disponibilidad");
+  const { error } = await supabase.from("professional_working_hours").insert({ organization_id: tenant.organizationId, branch_id: tenant.branchId, professional_id: professionalId, weekday, starts_at: startsAt, ends_at: endsAt });
+  if (error) fail("/agenda/disponibilidad", "No se pudo guardar el horario.");
+  await recordAudit(user, "create_working_hours", "professional", professionalId, { weekday, startsAt, endsAt });
+  done("/agenda/disponibilidad", "Horario guardado.");
+}
+
+export async function createTimeOffAction(formData: FormData) {
+  const user = await requireRoleForPath("/configuracion");
+  const tenant = tenantScopeFromUser(user);
+  const professionalId = getString(formData, "professionalId");
+  const startsAt = parseRequiredDate(getString(formData, "startsAt"), "/agenda/disponibilidad", "Inicio");
+  const endsAt = parseRequiredDate(getString(formData, "endsAt"), "/agenda/disponibilidad", "Fin");
+  if (!professionalId || new Date(endsAt) <= new Date(startsAt)) fail("/agenda/disponibilidad", "Bloqueo invalido.");
+  if (!shouldUseSupabaseStore()) done("/agenda/disponibilidad", "Disponible con Supabase.");
+  const supabase = await requireSupabaseUser("/agenda/disponibilidad");
+  const { error } = await supabase.from("professional_time_off").insert({ organization_id: tenant.organizationId, branch_id: tenant.branchId, professional_id: professionalId, starts_at: startsAt, ends_at: endsAt, reason: getString(formData, "reason") });
+  if (error) fail("/agenda/disponibilidad", "No se pudo guardar el bloqueo.");
+  await recordAudit(user, "create_time_off", "professional", professionalId, { startsAt, endsAt });
+  done("/agenda/disponibilidad", "Bloqueo guardado.");
+}
